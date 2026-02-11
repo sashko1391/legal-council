@@ -1,0 +1,60 @@
+{
+  "name": "legal-council",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-agent AI platform for Ukrainian legal work - Contract Review & Document Generation",
+  "author": "Oleksandr",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:integration": "LEGAL_COUNCIL_ENV=testing jest --testPathPattern=integration"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0",
+    "@google/generative-ai": "^0.2.0",
+    "next": "^14.1.0",
+    "openai": "^4.28.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "node-cache": "^5.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "typescript": "^5.3.3",
+    "eslint": "^8.56.0",
+    "eslint-config-next": "^14.1.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "jest": "^29.7.0",
+    "@testing-library/react": "^14.1.2",
+    "@testing-library/jest-dom": "^6.2.0",
+    "ts-jest": "^29.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/legal-council.git"
+  },
+  "keywords": [
+    "legal-tech",
+    "ai",
+    "multi-agent",
+    "contract-review",
+    "document-generation",
+    "ukrainian-law",
+    "claude",
+    "gpt-4",
+    "gemini"
+  ]
+}

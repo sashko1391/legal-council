@@ -1,0 +1,81 @@
+# Gitleaks Configuration for Legal Council
+# Detects API keys, secrets, passwords
+
+title = "Legal Council Security Scan"
+
+[[rules]]
+description = "Anthropic API Key"
+id = "anthropic-api-key"
+regex = '''sk-ant-api03-[a-zA-Z0-9_-]{95}'''
+tags = ["api", "anthropic", "secret"]
+
+[[rules]]
+description = "OpenAI API Key"
+id = "openai-api-key"
+regex = '''sk-[a-zA-Z0-9]{48}'''
+tags = ["api", "openai", "secret"]
+
+[[rules]]
+description = "Google API Key"
+id = "google-api-key"
+regex = '''AIza[a-zA-Z0-9_-]{35}'''
+tags = ["api", "google", "secret"]
+
+[[rules]]
+description = "Generic API Key"
+id = "generic-api-key"
+regex = '''(?i)(api[_-]?key|apikey|api[_-]?secret)['":\s]*[=:]\s*['"]?[a-zA-Z0-9_-]{20,}['"]?'''
+tags = ["api", "generic", "secret"]
+
+[[rules]]
+description = "Private Key"
+id = "private-key"
+regex = '''-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----'''
+tags = ["key", "private"]
+
+[[rules]]
+description = "AWS Access Key"
+id = "aws-access-key"
+regex = '''AKIA[0-9A-Z]{16}'''
+tags = ["aws", "secret"]
+
+[[rules]]
+description = "Slack Token"
+id = "slack-token"
+regex = '''xox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}'''
+tags = ["slack", "token"]
+
+[[rules]]
+description = "GitHub Token"
+id = "github-token"
+regex = '''ghp_[a-zA-Z0-9]{36}'''
+tags = ["github", "token"]
+
+[[rules]]
+description = "Stripe API Key"
+id = "stripe-key"
+regex = '''sk_live_[a-zA-Z0-9]{24,99}'''
+tags = ["stripe", "secret"]
+
+[[rules]]
+description = "Password in code"
+id = "password-in-code"
+regex = '''(?i)(password|passwd|pwd)['":\s]*[=:]\s*['"][^'"\s]{8,}['"]'''
+tags = ["password", "credentials"]
+
+[allowlist]
+description = "Allowlisted files and patterns"
+paths = [
+  '''.env.example''',  # Example file is OK
+  '''.*_test\.ts''',   # Test files with mock keys
+  '''README\.md''',    # Documentation
+  '''PROJECT_CONTEXT\.md''',
+  '''DEVELOPMENT_LOG\.md''',
+]
+
+regexes = [
+  '''sk-ant-xxx''',            # Placeholder in docs
+  '''sk-xxx''',                # Placeholder in docs
+  '''AIzaXXX''',               # Placeholder in docs
+  '''your-api-key-here''',     # Example placeholder
+]
