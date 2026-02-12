@@ -141,6 +141,8 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
   'gpt-4o': { input: 5, output: 15 },
   'gpt-4o-mini': { input: 0.15, output: 0.60 },  // Add this if missing
 
+  // OpenAI cheap models
+  'gpt-4o-mini': { input: 0.15, output: 0.60 },  // ✅ ADD THIS LINE
   
   // Google (per 1M tokens) - FREE tier
   'gemini-2.5-flash-lite': { input: 0, output: 0 },  // ✅ ADD THIS LINE

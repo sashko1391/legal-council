@@ -2,7 +2,8 @@
  * Ukrainian Law Service
  * Provides legal references and context for Ukrainian jurisdiction
  * 
- * UPDATED: Added getAllLaws() method for generation-prompts integration
+ * MVP: Hardcoded common laws
+ * Future: Scraping zakon.rada.gov.ua or Liga:ZAKON API
  */
 
 import NodeCache from 'node-cache';
@@ -144,13 +145,6 @@ export class UkrainianLawService {
   }
   
   /**
-   * Get ALL laws (NEW - for generation-prompts integration)
-   */
-  getAllLaws(): Record<string, LawInfo> {
-    return COMMON_LAWS;
-  }
-  
-  /**
    * Get all applicable laws for document type
    */
   getApplicableLaws(documentType: string): LawInfo[] {
@@ -181,7 +175,7 @@ export class UkrainianLawService {
   async getLegalContext(documentType: string): Promise<string> {
     const applicableLaws = this.getApplicableLaws(documentType);
     
-    let context = 'ЗАСТОСОВАНЕ ЗАКОНОДАВСТВО УКРАЇНИ:\n\n';
+    let context = 'ЗАСТОСОВНЕ ЗАКОНОДАВСТВО УКРАЇНИ:\n\n';
     
     for (const law of applicableLaws) {
       context += `${law.fullName} (${law.code}):\n`;
@@ -201,53 +195,115 @@ export class UkrainianLawService {
   }
   
   /**
-   * Validate contract section against Ukrainian law
+   * Search for law (MVP: returns zakon.rada.gov.ua link)
+   * Future: Actual scraping or API call
    */
-  validateSection(sectionContent: string, lawCode: string, article: string): {
-    valid: boolean;
-    issues: string[];
-  } {
-    // TODO: Implement actual validation logic
-    // For MVP, just return valid
-    return {
-      valid: true,
-      issues: [],
-    };
+  async searchLaw(query: string): Promise<string> {
+    // Check cache
+    const cacheKey = `search:${query}`;
+    const cached = lawCache.get<string>(cacheKey);
+    if (cached) return cached;
+    
+    // For MVP: Just return search URL
+    const searchUrl = `https://zakon.rada.gov.ua/laws/main?find=${encodeURIComponent(query)}`;
+    
+    lawCache.set(cacheKey, searchUrl);
+    return searchUrl;
   }
   
   /**
-   * Search for relevant law articles by keyword
+   * Get ДСТУ-compliant document structure
    */
-  searchArticles(keyword: string): Array<{
-    lawCode: string;
-    article: string;
-    description: string;
-  }> {
-    const results: Array<{
-      lawCode: string;
-      article: string;
-      description: string;
-    }> = [];
+  getDSTUStructure(documentType: string): typeof DSTU_STRUCTURE {
+    // Future: Different structures for different doc types
+    return DSTU_STRUCTURE;
+  }
+  
+  /**
+   * Format date in Ukrainian standard
+   */
+  formatDate(date: Date): string {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
     
-    const lowerKeyword = keyword.toLowerCase();
+    return `${day}.${month}.${year}`;
+  }
+  
+  /**
+   * Format currency amount
+   */
+  formatCurrency(amount: number): string {
+    const formatter = new Intl.NumberFormat('uk-UA', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
     
-    for (const [code, law] of Object.entries(COMMON_LAWS)) {
-      if (law.keyArticles) {
-        for (const [article, description] of Object.entries(law.keyArticles)) {
-          if (description.toLowerCase().includes(lowerKeyword)) {
-            results.push({
-              lawCode: code,
-              article,
-              description,
-            });
-          }
-        }
-      }
+    const formatted = formatter.format(amount);
+    const amountInWords = this.numberToWords(amount);
+    
+    return `${formatted} (${amountInWords}) гривень`;
+  }
+  
+  /**
+   * Convert number to Ukrainian words (simplified for MVP)
+   */
+  private numberToWords(num: number): string {
+    // Simplified - only handles common amounts
+    // Full implementation would use comprehensive number-to-words library
+    
+    const thousands = Math.floor(num / 1000);
+    const hundreds = Math.floor((num % 1000) / 100);
+    const tens = Math.floor((num % 100) / 10);
+    const ones = num % 10;
+    
+    const digits = ['', 'одна', 'дві', 'три', 'чотири', 'п\'ять', 'шість', 'сім', 'вісім', 'дев\'ять'];
+    const teens = ['десять', 'одинадцять', 'дванадцять', 'тринадцять', 'чотирнадцять', 'п\'ятнадцять', 'шістнадцять', 'сімнадцять', 'вісімнадцять', 'дев\'ятнадцять'];
+    const tensWords = ['', '', 'двадцять', 'тридцять', 'сорок', 'п\'ятдесят', 'шістдесят', 'сімдесят', 'вісімдесят', 'дев\'яносто'];
+    const hundredsWords = ['', 'сто', 'двісті', 'триста', 'чотириста', 'п\'ятсот', 'шістсот', 'сімсот', 'вісімсот', 'дев\'ятсот'];
+    
+    let result = '';
+    
+    if (thousands > 0) {
+      result += digits[thousands] + ' тисяч' + (thousands === 1 ? 'а' : '') + ' ';
     }
     
-    return results;
+    if (hundreds > 0) {
+      result += hundredsWords[hundreds] + ' ';
+    }
+    
+    if (tens === 1) {
+      result += teens[ones] + ' ';
+    } else {
+      if (tens > 0) result += tensWords[tens] + ' ';
+      if (ones > 0) result += digits[ones] + ' ';
+    }
+    
+    return result.trim() || 'нуль';
+  }
+  
+  // ==========================================
+  // FUTURE: Full text retrieval
+  // ==========================================
+  
+  /**
+   * Get full text of law (Not implemented in MVP)
+   * Future: Scraping or Liga API
+   */
+  async getLawFullText(lawCode: string): Promise<string> {
+    throw new Error('Full text retrieval not implemented in MVP. Use hardcoded key articles.');
+  }
+  
+  /**
+   * Update law database from zakon.rada.gov.ua (Future)
+   */
+  async updateLawDatabase(): Promise<void> {
+    throw new Error('Auto-update not implemented. Manual updates via code for MVP.');
   }
 }
 
-// Export singleton instance
+// ==========================================
+// SINGLETON INSTANCE
+// ==========================================
+
 export const ukrainianLawService = new UkrainianLawService();

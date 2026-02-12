@@ -9,27 +9,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GenerationOrchestrator } from '../../../packages/legal-council/orchestrators/generation-orchestrator';
 import type { DocumentGenerationRequest } from '../../../packages/legal-council/types/generation-types';
 
-// ==========================================
-// NEXT.JS 14 ROUTE SEGMENT CONFIG
-// ==========================================
-// Replaced deprecated `export const config = {...}` with new format
-
-// Maximum execution time (5 minutes for complex document generation)
-export const maxDuration = 300;
-
-// Force dynamic rendering (no static generation)
-export const dynamic = 'force-dynamic';
-
-// Runtime (nodejs, not edge)
-export const runtime = 'nodejs';
-
-// ==========================================
-// POST HANDLER
-// ==========================================
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '5mb',
+    },
+  },
+};
 
 export async function POST(request: NextRequest) {
   try {
-    // Parse request body (Next.js 14 app/ routes handle large bodies automatically)
+    // Parse request body
     const body = await request.json();
     
     // Validate required fields
@@ -125,4 +115,12 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// GET method not supported
+export async function GET() {
+  return NextResponse.json(
+    { error: 'Method not allowed. Use POST.' },
+    { status: 405 }
+  );
 }
