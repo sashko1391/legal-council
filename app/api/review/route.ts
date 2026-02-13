@@ -2,7 +2,9 @@
  * API Route: Contract Review
  * POST /api/review
  * 
- * Accepts contract text, runs 4-agent analysis, returns comprehensive report
+ * FIX #15 (Feb 13, 2026): Added contract text size validation
+ *   — Max 50,000 chars (~25 pages) to prevent context window overflow
+ *   — Clear Ukrainian error message for users
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -12,16 +14,14 @@ import type { ContractReviewRequest } from '../../../packages/legal-council/type
 // ==========================================
 // NEXT.JS 14 ROUTE SEGMENT CONFIG
 // ==========================================
-// Replaced deprecated `export const config = {...}` with new format
 
-// Maximum execution time (5 minutes for complex contracts)
 export const maxDuration = 300;
-
-// Force dynamic rendering (no static generation)
 export const dynamic = 'force-dynamic';
-
-// Runtime (nodejs, not edge)
 export const runtime = 'nodejs';
+
+// FIX #15: Size limits
+const MAX_CONTRACT_CHARS = 50_000; // ~25 pages, fits in most LLM context windows
+const MIN_CONTRACT_CHARS = 50;     // At least something meaningful
 
 // ==========================================
 // POST HANDLER
@@ -29,13 +29,29 @@ export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    // Parse request body (Next.js 14 app/ routes handle large bodies automatically)
     const body = await request.json();
     
     // Validate required fields
     if (!body.contractText || typeof body.contractText !== 'string') {
       return NextResponse.json(
         { error: 'Missing or invalid contractText field' },
+        { status: 400 }
+      );
+    }
+
+    // FIX #15: Size validation
+    const textLength = body.contractText.length;
+
+    if (textLength < MIN_CONTRACT_CHARS) {
+      return NextResponse.json(
+        { error: `Текст контракту занадто короткий (${textLength} символів). Мінімум: ${MIN_CONTRACT_CHARS} символів.` },
+        { status: 400 }
+      );
+    }
+
+    if (textLength > MAX_CONTRACT_CHARS) {
+      return NextResponse.json(
+        { error: `Текст контракту занадто довгий (${textLength} символів). Максимум: ${MAX_CONTRACT_CHARS} символів (~25 сторінок). Будь ласка, розділіть документ на частини.` },
         { status: 400 }
       );
     }
@@ -81,35 +97,22 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('❌ Review API error:', error);
 
-    // Handle specific error types
     if (error instanceof Error) {
-      // API key errors
       if (error.message.includes('API key')) {
         return NextResponse.json(
           { error: 'Invalid API configuration. Please check environment variables.' },
           { status: 500 }
         );
       }
-
-      // Rate limit errors
       if (error.message.includes('rate limit')) {
         return NextResponse.json(
           { error: 'Rate limit exceeded. Please try again later.' },
           { status: 429 }
         );
       }
-
-      // Generic error
-      return NextResponse.json(
-        { error: error.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Unknown error
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

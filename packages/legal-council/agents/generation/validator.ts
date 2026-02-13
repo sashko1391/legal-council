@@ -1,10 +1,13 @@
 /**
  * Generation Validator Agent
  * Checks legal compliance and ДСТУ standards of drafted document
+ * 
+ * FIX #10: Uses 'gen-validator' role (distinct from review 'validator')
+ * FIX #23: Imports buildValidatorPrompt directly (removed wrapper buildGenerationValidatorPrompt)
  */
 
 import { BaseAgent } from '../base-agent';
-import { buildGenerationValidatorPrompt } from '../../config/generation-prompts';
+import { buildValidatorPrompt } from '../../config/generation-prompts';
 import { createGenerationAgentConfigs } from '../../config/models';
 import type {
   GenerationValidatorOutput,
@@ -15,7 +18,8 @@ import type {
 export class GenerationValidatorAgent extends BaseAgent<GenerationValidatorOutput> {
   constructor() {
     const configs = createGenerationAgentConfigs();
-    const validatorConfig = configs.find((c) => c.role === 'validator')!;
+    // FIX #10: Now looks for 'gen-validator' role
+    const validatorConfig = configs.find((c) => c.role === 'gen-validator')!;
 
     super(validatorConfig, '');
   }
@@ -27,7 +31,8 @@ export class GenerationValidatorAgent extends BaseAgent<GenerationValidatorOutpu
     analyzerOutput: AnalyzerOutput,
     drafterOutput: DrafterOutput
   ): Promise<GenerationValidatorOutput> {
-    this.systemPrompt = await buildGenerationValidatorPrompt();
+    // FIX #23: Direct call instead of wrapper
+    this.systemPrompt = await buildValidatorPrompt();
 
     const userPrompt = this.buildUserPrompt(analyzerOutput, drafterOutput);
     const output = await this.call(userPrompt);

@@ -85,6 +85,11 @@ UKRAINIAN LAW CONTEXT:
 
 TONE: Professional, precise, balanced.
 
+🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
+ВСІ текстові значення у JSON (summary, description, title, action, rationale, specificLanguage, issue, exploitationScenario, suggestedFix) ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
+JSON ключі залишаються англійською (executiveSummary, keyIssues, severity тощо).
+Посилання на закони: "ЦКУ ст. 626", "ГКУ ст. 180", "КЗпП ст. 36" тощо.
+
 CRITICAL: 
 - Output ONLY valid JSON
 - MAXIMUM 7 key issues
@@ -150,6 +155,10 @@ SEVERITY CALIBRATION:
 - 1 = "Theoretical issue, unlikely to matter"
 
 TONE: Aggressive, creative, ruthless.
+
+🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
+ВСІ текстові значення у JSON ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
+JSON ключі залишаються англійською.
 
 CRITICAL:
 - Output ONLY valid JSON
@@ -223,6 +232,10 @@ VERDICT LOGIC:
 
 TONE: Strict but fair.
 
+🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
+ВСІ текстові значення у JSON ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
+JSON ключі залишаються англійською.
+
 CRITICAL: 
 - Output ONLY valid JSON
 - NO quotes inside strings
@@ -282,6 +295,11 @@ CONFIDENCE CALIBRATION:
 - <0.5: Major contradictions, needs human lawyer review
 
 TONE: Confident, clear, actionable.
+
+🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
+ВСІ текстові значення у JSON (summary, title, description, impact, mitigation, action, rationale, specificLanguage) ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
+JSON ключі залишаються англійською.
+Стиль: як досвідчений український юрист пише клієнту.
 
 CRITICAL: 
 - Output ONLY valid JSON

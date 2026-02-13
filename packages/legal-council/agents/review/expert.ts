@@ -13,7 +13,7 @@ import type { ExpertOutput, ContractReviewRequest } from '../../types/review-typ
 export class ExpertAgent extends BaseAgent<ExpertOutput> {
   constructor() {
     const configs = createReviewAgentConfigs();
-    const expertConfig = configs.find((c: any) => c.role === 'expert')!;
+    const expertConfig = configs.find((c) => c.role === 'expert')!;
 
     // System prompt will be set dynamically based on contract type
     super(expertConfig, ''); // Empty for now, set in analyze()

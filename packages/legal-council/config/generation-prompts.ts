@@ -20,6 +20,8 @@ ROLE: Parse user's natural language requirements into structured, actionable spe
 - Suggested clauses: MAXIMUM 5 items
 - Each description: 50-100 words MAX
 
+🇺🇦 МОВА: Всі текстові значення у JSON — УКРАЇНСЬКОЮ МОВОЮ. JSON ключі — англійською.
+
 OUTPUT FORMAT (strict JSON):
 {
   "analysis": {

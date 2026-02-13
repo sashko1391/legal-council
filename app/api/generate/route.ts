@@ -2,7 +2,9 @@
  * API Route: Document Generation
  * POST /api/generate
  * 
- * Accepts requirements, generates ДСТУ-compliant Ukrainian contract
+ * FIX #15 (Feb 13, 2026): Added text size validation
+ *   — Max 10,000 chars for requirements
+ *   — Clear error messages
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -12,16 +14,14 @@ import type { DocumentGenerationRequest } from '../../../packages/legal-council/
 // ==========================================
 // NEXT.JS 14 ROUTE SEGMENT CONFIG
 // ==========================================
-// Replaced deprecated `export const config = {...}` with new format
 
-// Maximum execution time (5 minutes for complex document generation)
 export const maxDuration = 300;
-
-// Force dynamic rendering (no static generation)
 export const dynamic = 'force-dynamic';
-
-// Runtime (nodejs, not edge)
 export const runtime = 'nodejs';
+
+// FIX #15: Size limits
+const MAX_REQUIREMENTS_CHARS = 10_000;
+const MIN_REQUIREMENTS_CHARS = 20;
 
 // ==========================================
 // POST HANDLER
@@ -29,7 +29,6 @@ export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    // Parse request body (Next.js 14 app/ routes handle large bodies automatically)
     const body = await request.json();
     
     // Validate required fields
@@ -43,6 +42,23 @@ export async function POST(request: NextRequest) {
     if (!body.requirements || typeof body.requirements !== 'string') {
       return NextResponse.json(
         { error: 'Missing or invalid requirements field' },
+        { status: 400 }
+      );
+    }
+
+    // FIX #15: Size validation
+    const reqLength = body.requirements.length;
+
+    if (reqLength < MIN_REQUIREMENTS_CHARS) {
+      return NextResponse.json(
+        { error: `Вимоги занадто короткі (${reqLength} символів). Мінімум: ${MIN_REQUIREMENTS_CHARS} символів. Опишіть деталі договору.` },
+        { status: 400 }
+      );
+    }
+
+    if (reqLength > MAX_REQUIREMENTS_CHARS) {
+      return NextResponse.json(
+        { error: `Вимоги занадто довгі (${reqLength} символів). Максимум: ${MAX_REQUIREMENTS_CHARS} символів. Спробуйте скоротити опис.` },
         { status: 400 }
       );
     }
@@ -88,41 +104,27 @@ export async function POST(request: NextRequest) {
     console.error('❌ Generation API error:', error);
 
     if (error instanceof Error) {
-      // API key errors
       if (error.message.includes('API key')) {
         return NextResponse.json(
           { error: 'Invalid API configuration. Please check environment variables.' },
           { status: 500 }
         );
       }
-
-      // Rate limit errors
       if (error.message.includes('rate limit')) {
         return NextResponse.json(
           { error: 'Rate limit exceeded. Please try again later.' },
           { status: 429 }
         );
       }
-
-      // Validation errors
       if (error.message.includes('Invalid') || error.message.includes('Missing')) {
         return NextResponse.json(
           { error: error.message },
           { status: 400 }
         );
       }
-
-      // Generic error
-      return NextResponse.json(
-        { error: error.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Unknown error
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

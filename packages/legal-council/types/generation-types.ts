@@ -1,6 +1,9 @@
 /**
  * Document Generation Types
- * Specific to the Generation Tab workflow
+ * 
+ * FIX #10: gen-validator role
+ * FIX #11: Partial<Record> for COMMON_CLAUSES (no `as any`)
+ * FIX #18 (Feb 13, 2026): All ClauseType templates filled in (Ukrainian)
  */
 
 import { BaseAgentOutput } from '../../core/orchestrator/types';
@@ -11,7 +14,7 @@ import { BaseAgentOutput } from '../../core/orchestrator/types';
 
 export interface DocumentGenerationRequest {
   documentType: DocumentType;
-  requirements: string; // User's natural language requirements
+  requirements: string;
   jurisdiction?: string;
   parties?: PartyInfo[];
   specificClauses?: ClauseRequest[];
@@ -70,7 +73,7 @@ export interface AnalyzerOutput extends BaseAgentOutput {
 export interface DrafterOutput extends BaseAgentOutput {
   role: 'drafter';
   draft: {
-    documentText: string; // Full contract text
+    documentText: string;
     structure: DocumentStructure;
     includedClauses: GeneratedClause[];
     notes: string[];
@@ -78,12 +81,12 @@ export interface DrafterOutput extends BaseAgentOutput {
 }
 
 export interface GenerationValidatorOutput extends BaseAgentOutput {
-  role: 'validator';
+  role: 'gen-validator';
   validation: {
     legalCompliance: ComplianceCheck[];
     missingElements: string[];
     riskFlags: RiskFlag[];
-    overallScore: number; // 0-100
+    overallScore: number;
     verdict: 'APPROVED' | 'NEEDS_REVISION';
   };
 }
@@ -128,7 +131,7 @@ export interface GeneratedClause {
   sectionNumber: string;
   title: string;
   text: string;
-  alternatives?: string[]; // Alternative phrasings
+  alternatives?: string[];
 }
 
 export interface DocumentStructure {
@@ -140,7 +143,7 @@ export interface DocumentStructure {
 }
 
 export interface ComplianceCheck {
-  requirement: string; // e.g., "Must include governing law clause"
+  requirement: string;
   status: 'met' | 'not_met' | 'partial';
   details: string;
 }
@@ -148,7 +151,7 @@ export interface ComplianceCheck {
 export interface RiskFlag {
   severity: 1 | 2 | 3 | 4 | 5;
   issue: string;
-  location: string; // Clause reference
+  location: string;
   recommendation: string;
 }
 
@@ -185,14 +188,14 @@ export interface DocumentGenerationResponse {
   summary: {
     executiveSummary: string;
     keyTerms: KeyTerm[];
-    includedClauses: string[]; // List of clause types included
+    includedClauses: string[];
   };
   
   qualityMetrics: {
-    complianceScore: number; // 0-100
-    legalSoundness: number; // 0-100
-    clarity: number; // 0-100
-    overall: number; // 0-100
+    complianceScore: number;
+    legalSoundness: number;
+    clarity: number;
+    overall: number;
   };
   
   recommendations: {
@@ -211,19 +214,34 @@ export interface ClauseTemplate {
   jurisdiction: string;
   template: 'standard' | 'pro-client' | 'balanced';
   text: string;
-  variables: string[]; // e.g., ["{PARTY_A}", "{AMOUNT}"]
+  variables: string[];
 }
 
-// Common templates
+/**
+ * FIX #18: Complete set of clause templates (Ukrainian legal language).
+ * Now a full Record — all ClauseType values present, no `as any` needed.
+ */
 export const COMMON_CLAUSES: Record<ClauseType, string> = {
-  termination: `Either party may terminate this Agreement upon [NOTICE_PERIOD] written notice to the other party.`,
-  
-  liability: `IN NO EVENT SHALL EITHER PARTY BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR PUNITIVE DAMAGES.`,
-  
-  confidentiality: `The Receiving Party shall hold and maintain the Confidential Information in strictest confidence.`,
-  
-  // ... (more would be defined in production)
-} as any;
+  termination: `Кожна із Сторін має право розірвати цей Договір, попередивши іншу Сторону за [NOTICE_PERIOD] до передбачуваної дати розірвання шляхом направлення письмового повідомлення. У разі істотного порушення умов Договору однією із Сторін, інша Сторона має право розірвати Договір в односторонньому порядку відповідно до ст. 651 ЦКУ.`,
+
+  liability: `Сторони несуть відповідальність за невиконання або неналежне виконання своїх зобов'язань за цим Договором відповідно до чинного законодавства України. У жодному випадку жодна із Сторін не несе відповідальності за непрямі, побічні або штрафні збитки.`,
+
+  indemnification: `[PARTY_A] зобов'язується відшкодувати [PARTY_B] будь-які збитки, витрати та вимоги третіх осіб, що виникли внаслідок порушення [PARTY_A] умов цього Договору або чинного законодавства України.`,
+
+  confidentiality: `Сторони зобов'язуються не розголошувати конфіденційну інформацію, отриману в процесі виконання цього Договору, протягом строку дії Договору та [CONFIDENTIALITY_PERIOD] після його припинення. Зобов'язання щодо конфіденційності не поширюються на інформацію, що стала загальнодоступною не з вини Сторони, яка її отримала.`,
+
+  ip_assignment: `Усі права інтелектуальної власності на результати робіт, створені на виконання цього Договору, переходять до [PARTY_B] з моменту їх створення та повної оплати відповідно до ст. 430 ЦКУ. [PARTY_A] гарантує, що результати робіт є оригінальними та не порушують прав третіх осіб.`,
+
+  payment_terms: `[PARTY_B] зобов'язується сплатити [PARTY_A] суму у розмірі [AMOUNT] грн (у тому числі ПДВ) протягом [PAYMENT_PERIOD] з моменту [PAYMENT_TRIGGER]. Оплата здійснюється безготівковим розрахунком на банківський рахунок [PARTY_A]. У разі прострочення оплати нараховується пеня у розмірі [PENALTY_RATE]% від суми заборгованості за кожен день прострочення.`,
+
+  dispute_resolution: `Спори, що виникають з цього Договору, вирішуються шляхом переговорів. У разі неможливості вирішення спору шляхом переговорів протягом [NEGOTIATION_PERIOD], спір передається на розгляд до господарського суду за місцезнаходженням відповідача відповідно до ГПК України.`,
+
+  force_majeure: `Сторони звільняються від відповідальності за часткове або повне невиконання зобов'язань за цим Договором, якщо це невиконання стало наслідком обставин непереборної сили (форс-мажор), а саме: стихійних лих, воєнних дій, ембарго, дій органів влади, епідемій тощо. Сторона, для якої склались форс-мажорні обставини, зобов'язана повідомити іншу Сторону протягом [FORCE_MAJEURE_NOTICE] з підтвердженням ТПП України.`,
+
+  warranties: `[PARTY_A] гарантує, що: (а) має всі необхідні дозволи та ліцензії для виконання цього Договору; (б) виконання Договору не порушує права третіх осіб; (в) результати робіт відповідатимуть вимогам, зазначеним у Додатку №1 до цього Договору.`,
+
+  custom: `[CUSTOM_CLAUSE_TEXT]`,
+};
 
 // ==========================================
 // HELPER FUNCTIONS
@@ -243,8 +261,27 @@ export function getDocumentTypeLabel(type: DocumentType): string {
   return labels[type];
 }
 
-export function formatDocumentForDownload(text: string, format: 'markdown' | 'docx' | 'pdf'): string {
-  // In production, this would actually convert formats
-  // For now, just return markdown
-  return text;
+/**
+ * FIX #20: Document download formatting
+ * Currently only markdown is fully supported.
+ * DOCX and PDF require additional libraries (docx, pdfkit).
+ */
+export function formatDocumentForDownload(
+  text: string,
+  format: 'markdown' | 'docx' | 'pdf'
+): string {
+  switch (format) {
+    case 'markdown':
+      return text;
+    case 'docx':
+      // TODO: Integrate 'docx' library for proper Word export
+      console.warn('⚠️ DOCX export not yet implemented — returning markdown');
+      return text;
+    case 'pdf':
+      // TODO: Integrate 'pdfkit' or 'puppeteer' for PDF export
+      console.warn('⚠️ PDF export not yet implemented — returning markdown');
+      return text;
+    default:
+      return text;
+  }
 }

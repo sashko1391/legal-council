@@ -1,6 +1,9 @@
 /**
  * Polisher Agent (Document Generation)
  * Finalizes document with professional quality
+ * 
+ * FIX #14 (Feb 13, 2026): Calculate real clarity & quality metrics
+ * FIX #11: Removed `as any` for documentType — use proper DocumentType type
  */
 
 import { BaseAgent } from '../base-agent';
@@ -11,6 +14,7 @@ import type {
   DrafterOutput,
   GenerationValidatorOutput,
   DocumentGenerationResponse,
+  DocumentType,
 } from '../../types/generation-types';
 
 export class PolisherAgent extends BaseAgent<PolisherOutput> {
@@ -79,23 +83,64 @@ export class PolisherAgent extends BaseAgent<PolisherOutput> {
     }
   }
 
+  /**
+   * FIX #14: Calculate real quality metrics instead of hardcoded values.
+   * - complianceScore: from validator
+   * - legalSoundness: average of validator score and polisher confidence
+   * - clarity: calculated from improvements count and risk resolution
+   * - overall: weighted average of all three
+   */
+  private calculateQualityMetrics(
+    polisherOutput: PolisherOutput,
+    validatorOutput: GenerationValidatorOutput
+  ): { complianceScore: number; legalSoundness: number; clarity: number; overall: number } {
+    const validatorScore = validatorOutput.validation.overallScore;
+    const polisherConfidence = Math.round((polisherOutput.confidence || 0.85) * 100);
+    
+    // Compliance: directly from validator
+    const complianceScore = validatorScore;
+
+    // Legal soundness: average of validator score and polisher confidence
+    const legalSoundness = Math.round((validatorScore + polisherConfidence) / 2);
+
+    // Clarity: based on improvements made and risk flags resolved
+    const improvementCount = polisherOutput.polished?.improvements?.length || 0;
+    const riskFlagCount = validatorOutput.validation.riskFlags.length;
+    // More improvements = better clarity work done
+    // Base of 70, +5 per improvement (up to 30 bonus), -3 per unresolved risk
+    const clarityBase = 70;
+    const clarityBonus = Math.min(30, improvementCount * 5);
+    const clarityPenalty = Math.min(20, riskFlagCount * 3);
+    const clarity = Math.min(100, Math.max(0, clarityBase + clarityBonus - clarityPenalty));
+
+    // Overall: weighted average (compliance 40%, legal 30%, clarity 30%)
+    const overall = Math.round(
+      complianceScore * 0.4 + legalSoundness * 0.3 + clarity * 0.3
+    );
+
+    return { complianceScore, legalSoundness, clarity, overall };
+  }
+
   buildFinalResponse(
     polisherOutput: PolisherOutput,
     analyzerOutput: any,
     drafterOutput: DrafterOutput,
     validatorOutput: GenerationValidatorOutput,
     metadata: {
-      documentType: string;
+      documentType: DocumentType;  // FIX #11: proper type instead of `string` + `as any`
       totalCost: number;
       processingTimeMs: number;
     }
   ): DocumentGenerationResponse {
+    // FIX #14: calculate real metrics
+    const qualityMetrics = this.calculateQualityMetrics(polisherOutput, validatorOutput);
+
     return {
       finalDocument: polisherOutput.polished.finalDocument,
       format: 'markdown',
 
       metadata: {
-        documentType: metadata.documentType as any,
+        documentType: metadata.documentType,  // FIX #11: no more `as any`
         generatedAt: new Date().toISOString(),
         jurisdiction: 'Ukraine',
         confidence: polisherOutput.confidence,
@@ -109,17 +154,12 @@ export class PolisherAgent extends BaseAgent<PolisherOutput> {
         includedClauses: drafterOutput.draft.includedClauses.map((c) => c.type),
       },
 
-      qualityMetrics: {
-        complianceScore: validatorOutput.validation.overallScore,
-        legalSoundness: validatorOutput.validation.overallScore,
-        clarity: 85, // Could be calculated from polisher improvements
-        overall: validatorOutput.validation.overallScore,
-      },
+      qualityMetrics,  // FIX #14: real calculated values
 
       recommendations: {
         beforeSigning: [
           'Перевірте всі реквізити сторін перед підписанням',
-          'Переконайтеся, що всі суми та дати заповнені правильно',
+          'Переконайтесь, що всі суми та дати заповнені правильно',
           'Зверніть увагу на розділи про відповідальність та розірвання договору',
         ],
         customizations:

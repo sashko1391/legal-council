@@ -1,6 +1,8 @@
 /**
  * Core Types for Legal Council Orchestration
- * Shared between Review and Generation workflows
+ * 
+ * FIX #10: 'gen-validator' role
+ * FIX #17 (Feb 13, 2026): Updated MODEL_PRICING to actual current prices
  */
 
 // ==========================================
@@ -8,15 +10,8 @@
 // ==========================================
 
 export type AgentRole = 
-  // Review agents
-  | 'expert' 
-  | 'provocateur' 
-  | 'validator' 
-  | 'synthesizer'
-  // Generation agents
-  | 'analyzer'
-  | 'drafter'
-  | 'polisher';
+  | 'expert' | 'provocateur' | 'validator' | 'synthesizer'
+  | 'analyzer' | 'drafter' | 'gen-validator' | 'polisher';
 
 export type ModelProvider = 'anthropic' | 'openai' | 'google';
 
@@ -37,12 +32,9 @@ export interface AgentConfig {
 export interface BaseAgentOutput {
   agentId: string;
   role: AgentRole;
-  confidence: number; // 0-1
+  confidence: number;
   timestamp: string;
-  tokensUsed: {
-    input: number;
-    output: number;
-  };
+  tokensUsed: { input: number; output: number };
   latencyMs: number;
 }
 
@@ -59,9 +51,9 @@ export interface AgentError {
 
 export interface StopCriteria {
   maxRounds: number;
-  maxSeverity: number; // 1-5 scale
-  minConfidence: number; // 0-1
-  convergenceThreshold: number; // Delta between rounds
+  maxSeverity: number;
+  minConfidence: number;
+  convergenceThreshold: number;
 }
 
 export interface OrchestratorConfig {
@@ -131,19 +123,27 @@ export interface CostCalculation {
   model: string;
 }
 
+/**
+ * FIX #17: Updated to actual prices (Feb 2026).
+ * Source: https://docs.anthropic.com/en/docs/about-claude/models
+ *         https://openai.com/pricing
+ *         https://ai.google.dev/pricing
+ * 
+ * Prices in USD per 1M tokens.
+ */
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  // Anthropic (per 1M tokens)
+  // Anthropic
   'claude-opus-4-5-20251101': { input: 15, output: 75 },
   'claude-sonnet-4-5-20250929': { input: 3, output: 15 },
-  
-  // OpenAI (per 1M tokens)
-  'gpt-4-turbo-2024-04-09': { input: 10, output: 30 },
-  'gpt-4o': { input: 5, output: 15 },
-  'gpt-4o-mini': { input: 0.15, output: 0.60 },  // Add this if missing
+  'claude-haiku-4-5-20251001': { input: 0.80, output: 4 },
 
-  
-  // Google (per 1M tokens) - FREE tier
-  'gemini-2.5-flash-lite': { input: 0, output: 0 },  // ✅ ADD THIS LINE
+  // OpenAI
+  'gpt-4-turbo-2024-04-09': { input: 10, output: 30 },
+  'gpt-4o': { input: 2.50, output: 10 },
+  'gpt-4o-mini': { input: 0.15, output: 0.60 },
+
+  // Google — free tier (rate limited)
+  'gemini-2.5-flash-lite': { input: 0, output: 0 },
   'gemini-1.5-flash': { input: 0, output: 0 },
   'gemini-2.0-flash-thinking-exp-01-21': { input: 0, output: 0 },
 };
@@ -154,16 +154,7 @@ export function calculateCost(
   outputTokens: number
 ): CostCalculation {
   const pricing = MODEL_PRICING[model] || { input: 0, output: 0 };
-  
   const inputCost = (inputTokens / 1_000_000) * pricing.input;
   const outputCost = (outputTokens / 1_000_000) * pricing.output;
-  
-  return {
-    inputTokens,
-    outputTokens,
-    inputCost,
-    outputCost,
-    totalCost: inputCost + outputCost,
-    model,
-  };
+  return { inputTokens, outputTokens, inputCost, outputCost, totalCost: inputCost + outputCost, model };
 }

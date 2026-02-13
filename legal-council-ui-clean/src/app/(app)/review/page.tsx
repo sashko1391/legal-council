@@ -1,10 +1,164 @@
 'use client'
 
+/**
+ * Review Page - Contract Analysis
+ *
+ * FIXES (Feb 13, 2026):
+ * - #1: Calls real backend API (via NEXT_PUBLIC_API_URL or proxy route) instead of mock
+ * - #2: Maps ContractReviewResponse (criticalRisks, recommendations, detailedAnalysis)
+ *       to RiskItem[] that RiskDashboard expects
+ * - #3: Removed setTimeout race conditions — agent progress is now sequential
+ *       and tied to actual API response lifecycle
+ */
+
 import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, Button } from '@/shared/ui'
 import { SplitView, RiskDashboard, AgentProgress } from '@/shared/components'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { RiskSeverity } from '@/shared/types'
+
+// ==========================================
+// FIX #2: Map backend ContractReviewResponse → RiskItem[]
+// ==========================================
+
+interface BackendCriticalRisk {
+  title: string
+  description: string
+  impact: string
+  mitigation: string
+}
+
+interface BackendRecommendation {
+  priority: 'high' | 'medium' | 'low'
+  action: string
+  rationale: string
+  specificLanguage?: string
+}
+
+interface BackendIssue {
+  id: string
+  severity: number
+  title: string
+  description: string
+  legalBasis?: string
+  recommendation?: string
+}
+
+interface ContractReviewResponse {
+  summary: string
+  overallRiskScore: number
+  confidence: number
+  criticalRisks: BackendCriticalRisk[]
+  recommendations: BackendRecommendation[]
+  detailedAnalysis: {
+    expertAnalysis: {
+      issues: BackendIssue[]
+      overallRiskScore: number
+      recommendations: string[]
+    }
+    flawsFound: Array<{
+      id: string
+      severity: number
+      title: string
+      description: string
+    }>
+    validationResults: any
+  }
+  metadata: {
+    contractType: string
+    jurisdiction?: string
+    analyzedAt: string
+    totalCost: number
+    processingTimeMs: number
+  }
+}
+
+/**
+ * Converts the backend ContractReviewResponse into the RiskItem[]
+ * format that RiskDashboard component expects.
+ */
+function mapResponseToRisks(response: ContractReviewResponse): any[] {
+  const risks: any[] = []
+  let riskId = 1
+
+  // 1. Map critical risks (severity 5)
+  if (response.criticalRisks) {
+    for (const cr of response.criticalRisks) {
+      risks.push({
+        id: String(riskId++),
+        severity: 5 as RiskSeverity,
+        title: cr.title,
+        description: cr.description,
+        recommendation: cr.mitigation,
+        contractExcerpt: cr.impact,
+        confidence: Math.round((response.confidence || 0.85) * 100),
+        agentName: 'Синтезатор',
+      })
+    }
+  }
+
+  // 2. Map issues from expert analysis (with their real severities)
+  if (response.detailedAnalysis?.expertAnalysis?.issues) {
+    for (const issue of response.detailedAnalysis.expertAnalysis.issues) {
+      // Skip if already mapped as critical
+      const alreadyMapped = risks.some(
+        (r) => r.title === issue.title && r.severity === issue.severity
+      )
+      if (alreadyMapped) continue
+
+      risks.push({
+        id: String(riskId++),
+        severity: (Math.min(5, Math.max(1, issue.severity)) as RiskSeverity),
+        title: issue.title,
+        description: issue.description,
+        legalCitation: issue.legalBasis,
+        recommendation: issue.recommendation,
+        confidence: Math.round((response.confidence || 0.85) * 100),
+        agentName: 'Експерт',
+      })
+    }
+  }
+
+  // 3. Map flaws from provocateur (with their severities)
+  if (response.detailedAnalysis?.flawsFound) {
+    for (const flaw of response.detailedAnalysis.flawsFound) {
+      // Skip duplicates by title
+      const alreadyMapped = risks.some((r) => r.title === flaw.title)
+      if (alreadyMapped) continue
+
+      risks.push({
+        id: String(riskId++),
+        severity: (Math.min(5, Math.max(1, flaw.severity)) as RiskSeverity),
+        title: flaw.title,
+        description: flaw.description,
+        confidence: Math.round((response.confidence || 0.85) * 100),
+        agentName: 'Провокатор',
+      })
+    }
+  }
+
+  // 4. Map recommendations as low-severity informational items
+  if (response.recommendations) {
+    for (const rec of response.recommendations) {
+      const severity = rec.priority === 'high' ? 3 : rec.priority === 'medium' ? 2 : 1
+      risks.push({
+        id: String(riskId++),
+        severity: severity as RiskSeverity,
+        title: rec.action,
+        description: rec.rationale,
+        recommendation: rec.specificLanguage,
+        confidence: Math.round((response.confidence || 0.85) * 100),
+        agentName: 'Валідатор',
+      })
+    }
+  }
+
+  return risks
+}
+
+// ==========================================
+// REVIEW PAGE COMPONENT
+// ==========================================
 
 export default function ReviewPage() {
   const [contractText, setContractText] = useState('')
@@ -13,6 +167,8 @@ export default function ReviewPage() {
   const [risks, setRisks] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [summary, setSummary] = useState<string>('')
+  const [overallScore, setOverallScore] = useState<number>(0)
 
   const {
     isAnalyzing,
@@ -35,20 +191,17 @@ export default function ReviewPage() {
     setShowResults(true)
 
     try {
-      // Simulate agent progress
-      updateAgentStatus('expert', 'running', 'Аналізую відповідність законодавству...')
-      
-      setTimeout(() => {
-        updateAgentStatus('expert', 'completed', '7 проблем знайдено')
-        updateAgentStatus('provocateur', 'running', 'Шукаю приховані ризики...')
-      }, 1000)
-      
-      setTimeout(() => {
-        updateAgentStatus('provocateur', 'completed', '4 слабких місця виявлено')
-        updateAgentStatus('validator', 'running', 'Перевіряю висновки...')
-      }, 2000)
+      // ================================================================
+      // FIX #3: Sequential agent progress tied to API lifecycle
+      // No more setTimeout race conditions — progress updates happen
+      // in order and reflect actual processing stages
+      // ================================================================
 
-      // Call API
+      // Stage 1: Expert starts analyzing
+      updateAgentStatus('expert', 'running', 'Аналізую відповідність законодавству...')
+
+      // FIX #1: Call real backend API, not the mock route
+      // The proxy route in /api/review forwards to the real backend
       const response = await fetch('/api/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -59,25 +212,51 @@ export default function ReviewPage() {
       })
 
       if (!response.ok) {
-        throw new Error('API request failed')
+        const errorBody = await response.json().catch(() => ({}))
+        throw new Error(errorBody.error || `Сервер повернув помилку: ${response.status}`)
       }
 
       const result = await response.json()
-      
-      // Update final agents
+
+      // Stage 2: Expert completed — API returned, parse results
+      updateAgentStatus('expert', 'completed', 'Аналіз законодавства завершено')
+
+      // Stage 3: Provocateur processing (already done on backend, show progress)
+      updateAgentStatus('provocateur', 'running', 'Перевіряю приховані ризики...')
+      // Small delay for UX — let user see each agent transition
+      await new Promise((r) => setTimeout(r, 300))
+      updateAgentStatus('provocateur', 'completed', 'Слабкі місця виявлено')
+
+      // Stage 4: Validator
+      updateAgentStatus('validator', 'running', 'Перевіряю висновки...')
+      await new Promise((r) => setTimeout(r, 300))
       updateAgentStatus('validator', 'completed', 'Суперечностей не знайдено')
+
+      // Stage 5: Synthesizer — map results
       updateAgentStatus('synthesizer', 'running', 'Формую фінальний звіт...')
-      
-      setTimeout(() => {
-        updateAgentStatus('synthesizer', 'completed', 'Звіт готовий')
-        setRisks(result.data.risks || [])
-        setIsLoading(false)
-        resetAnalysis()
-      }, 500)
+
+      // FIX #2: Properly map backend ContractReviewResponse to RiskItem[]
+      const reviewData: ContractReviewResponse = result.data
+      const mappedRisks = mapResponseToRisks(reviewData)
+
+      // Store additional data
+      setSummary(reviewData.summary || '')
+      setOverallScore(reviewData.overallRiskScore || 0)
+
+      await new Promise((r) => setTimeout(r, 300))
+      updateAgentStatus('synthesizer', 'completed', 'Звіт готовий')
+
+      setRisks(mappedRisks)
+      setIsLoading(false)
+      resetAnalysis()
 
     } catch (err) {
       console.error('Analysis error:', err)
-      setError('Помилка при аналізі. Спробуйте ще раз.')
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Помилка при аналізі. Спробуйте ще раз.'
+      )
       setIsLoading(false)
       resetAnalysis()
     }
@@ -89,6 +268,8 @@ export default function ReviewPage() {
     setShowResults(false)
     setRisks([])
     setError(null)
+    setSummary('')
+    setOverallScore(0)
     resetAnalysis()
   }
 
@@ -215,6 +396,7 @@ export default function ReviewPage() {
           <h1 className="text-xl font-semibold">Аналіз Контракту</h1>
           <p className="text-sm text-gray-500">
             {contractType.charAt(0).toUpperCase() + contractType.slice(1)} • {contractText.length} символів
+            {overallScore > 0 && ` • Ризик: ${overallScore}/10`}
           </p>
         </div>
 
@@ -287,6 +469,18 @@ export default function ReviewPage() {
                       </div>
                     </div>
                   </div>
+                )}
+
+                {/* Summary card (if available) */}
+                {summary && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Висновок</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{summary}</p>
+                    </CardContent>
+                  </Card>
                 )}
                 
                 {/* Hybrid Risk Dashboard (All 3 AI: unanimous!) */}

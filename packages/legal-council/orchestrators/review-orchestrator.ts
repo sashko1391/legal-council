@@ -1,9 +1,11 @@
 /**
  * Review Orchestrator
  * Coordinates Expert → Provocateur → Validator → Synthesizer
- * Implements tick-based cycle with stop criteria
  * 
- * FIX (Feb 11, 2026): buildFinalResponse moved to Orchestrator to avoid webpack cache issues
+ * FIX #11: Proper ContractType (no `as any`)
+ * FIX #16: Logger
+ * FIX #21 (Feb 13, 2026): Graceful degradation — if an agent fails,
+ *   pipeline continues with remaining agents and flags incomplete analysis.
  */
 
 import { ExpertAgent } from '../agents/review/expert';
@@ -13,23 +15,25 @@ import { SynthesizerAgent } from '../agents/review/synthesizer';
 import type {
   ContractReviewRequest,
   ContractReviewResponse,
+  ContractType,
   ExpertOutput,
   ProvocateurOutput,
   ValidatorOutput,
   SynthesizerOutput,
 } from '../types/review-types';
 import type { Round, AuditTrail } from '../../core/orchestrator/types';
+import { logger } from '../utils/logger';
 
 export interface ReviewOrchestratorConfig {
-  maxRounds: number; // Max iterations before forcing stop
-  maxSeverityThreshold: number; // Stop if no issues >= this severity
-  minConfidence: number; // Stop if all agents >= this confidence
+  maxRounds: number;
+  maxSeverityThreshold: number;
+  minConfidence: number;
   enableAuditTrail: boolean;
 }
 
 const DEFAULT_CONFIG: ReviewOrchestratorConfig = {
   maxRounds: 3,
-  maxSeverityThreshold: 3, // Stop if no severity >= 3 issues remain
+  maxSeverityThreshold: 3,
   minConfidence: 0.85,
   enableAuditTrail: true,
 };
@@ -43,8 +47,6 @@ export class ReviewOrchestrator {
 
   constructor(config: Partial<ReviewOrchestratorConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-
-    // Initialize agents
     this.expert = new ExpertAgent();
     this.provocateur = new ProvocateurAgent();
     this.validator = new ValidatorAgent();
@@ -52,116 +54,182 @@ export class ReviewOrchestrator {
   }
 
   /**
-   * Main orchestration method
+   * Main orchestration method with graceful degradation
    */
   async analyze(request: ContractReviewRequest): Promise<ContractReviewResponse> {
     const startTime = Date.now();
-    const rounds: Round[] = [];
     let totalCost = 0;
+    const failedAgents: string[] = [];
 
-    console.log('🛡️ Legal Council Review Session Starting...');
-    console.log(`   Max rounds: ${this.config.maxRounds}`);
-    console.log(`   Stop criteria: severity < ${this.config.maxSeverityThreshold}, confidence > ${this.config.minConfidence}`);
+    logger.info('🛡️ Legal Council Review Session Starting...');
+    logger.info(`   Max rounds: ${this.config.maxRounds}`);
 
-    // Round 1: Initial analysis
-    console.log('\n📋 Round 1: Expert Analysis');
+    // ========================
+    // Round 1: Expert Analysis (REQUIRED — fails entire pipeline if down)
+    // ========================
+    logger.info('\n📋 Round 1: Expert Analysis');
     const expertOutput = await this.expert.analyze(request);
     totalCost += this.expert.calculateCost(expertOutput.tokensUsed);
-    console.log(`   ✓ Found ${expertOutput.analysis.keyIssues.length} issues`);
-    console.log(`   ✓ Risk score: ${expertOutput.analysis.overallRiskScore}/10`);
-    console.log(`   ✓ Confidence: ${(expertOutput.confidence * 100).toFixed(0)}%`);
+    logger.info(`   ✓ Found ${expertOutput.analysis.keyIssues.length} issues, risk ${expertOutput.analysis.overallRiskScore}/10`);
 
-    // Round 2: Adversarial critique
-    console.log('\n🔥 Round 2: Provocateur Critique');
-    const provocateurOutput = await this.provocateur.critique(
-      request.contractText,
-      expertOutput
-    );
-    totalCost += this.provocateur.calculateCost(provocateurOutput.tokensUsed);
-    console.log(`   ✓ Found ${provocateurOutput.critique.flaws.length} flaws`);
-    console.log(`   ✓ Max severity: ${provocateurOutput.critique.maxSeverity}/5`);
-    console.log(`   ✓ Confidence: ${(provocateurOutput.confidence * 100).toFixed(0)}%`);
-
-    // Round 3: Validation
-    console.log('\n🔍 Round 3: Validator Check');
-    const validatorOutput = await this.validator.validate(
-      request,
-      expertOutput,
-      provocateurOutput
-    );
-    totalCost += this.validator.calculateCost(validatorOutput.tokensUsed);
-    console.log(`   ✓ Completeness: ${validatorOutput.validation.completenessScore}%`);
-    console.log(`   ✓ Verdict: ${validatorOutput.validation.verdict}`);
-    console.log(`   ✓ Contradictions: ${validatorOutput.validation.contradictions.length}`);
-
-    // Check stop criteria
-    const shouldStop = this.checkStopCriteria(
-      expertOutput,
-      provocateurOutput,
-      validatorOutput,
-      1
-    );
-
-    if (shouldStop.shouldStop) {
-      console.log(`\n✅ Stop criteria met: ${shouldStop.reason}`);
-    } else {
-      console.log(`\n⭐ Continue criteria: ${shouldStop.reason}`);
-      // In MVP, we don't actually iterate - just log
-      // Future: Implement multi-round refinement
+    // ========================
+    // Round 2: Provocateur Critique (FIX #21: OPTIONAL — degraded mode if fails)
+    // ========================
+    let provocateurOutput: ProvocateurOutput | null = null;
+    try {
+      logger.info('\n😈 Round 2: Provocateur Critique');
+      provocateurOutput = await this.provocateur.critique(request.contractText, expertOutput);
+      totalCost += this.provocateur.calculateCost(provocateurOutput.tokensUsed);
+      logger.info(`   ✓ Found ${provocateurOutput.critique.flaws.length} flaws`);
+    } catch (error) {
+      logger.warn(`   ⚠️ Provocateur failed, continuing in degraded mode: ${(error as Error).message}`);
+      failedAgents.push('provocateur');
+      provocateurOutput = this.createFallbackProvocateurOutput();
     }
 
-    // Final: Synthesis
-    console.log('\n📝 Final: Synthesizer');
-    const synthesizerOutput = await this.synthesizer.synthesize(
-      expertOutput,
-      provocateurOutput,
-      validatorOutput
-    );
-    totalCost += this.synthesizer.calculateCost(synthesizerOutput.tokensUsed);
-    console.log(`   ✓ Critical risks: ${synthesizerOutput.synthesis.criticalRisks.length}`);
-    console.log(`   ✓ Recommendations: ${synthesizerOutput.synthesis.recommendations.length}`);
-    console.log(`   ✓ Confidence: ${(synthesizerOutput.synthesis.confidence * 100).toFixed(0)}%`);
+    // ========================
+    // Round 3: Validator (FIX #21: OPTIONAL — degraded mode if fails)
+    // ========================
+    let validatorOutput: ValidatorOutput | null = null;
+    try {
+      logger.info('\n🔍 Round 3: Validator Check');
+      validatorOutput = await this.validator.validate(request, expertOutput, provocateurOutput!);
+      totalCost += this.validator.calculateCost(validatorOutput.tokensUsed);
+      logger.info(`   ✓ Completeness: ${validatorOutput.validation.completenessScore}%, verdict: ${validatorOutput.validation.verdict}`);
+    } catch (error) {
+      logger.warn(`   ⚠️ Validator failed, continuing in degraded mode: ${(error as Error).message}`);
+      failedAgents.push('validator');
+      validatorOutput = this.createFallbackValidatorOutput();
+    }
+
+    // ========================
+    // Final: Synthesizer (FIX #21: OPTIONAL — build basic response if fails)
+    // ========================
+    let synthesizerOutput: SynthesizerOutput | null = null;
+    try {
+      logger.info('\n📝 Final: Synthesizer');
+      synthesizerOutput = await this.synthesizer.synthesize(expertOutput, provocateurOutput!, validatorOutput!);
+      totalCost += this.synthesizer.calculateCost(synthesizerOutput.tokensUsed);
+      logger.info(`   ✓ Critical risks: ${synthesizerOutput.synthesis.criticalRisks.length}`);
+    } catch (error) {
+      logger.warn(`   ⚠️ Synthesizer failed, building response from Expert output: ${(error as Error).message}`);
+      failedAgents.push('synthesizer');
+      synthesizerOutput = this.createFallbackSynthesizerOutput(expertOutput);
+    }
 
     // Build final response
     const processingTimeMs = Date.now() - startTime;
     const finalResponse = this.buildFinalResponse(
-      synthesizerOutput,
+      synthesizerOutput!,
       expertOutput,
-      provocateurOutput,
-      validatorOutput,
+      provocateurOutput!,
+      validatorOutput!,
       {
         contractType: request.contractType,
         jurisdiction: request.jurisdiction,
         totalCost,
         processingTimeMs,
+        failedAgents,
       }
     );
 
-    console.log(`\n✨ Legal Council Review Complete!`);
-    console.log(`   Total cost: $${totalCost.toFixed(4)}`);
-    console.log(`   Processing time: ${(processingTimeMs / 1000).toFixed(1)}s`);
-    console.log(`   Final confidence: ${(finalResponse.confidence * 100).toFixed(0)}%`);
+    logger.info(`\n✨ Legal Council Review Complete!`);
+    logger.info(`   Total cost: $${totalCost.toFixed(4)}`);
+    logger.info(`   Processing time: ${(processingTimeMs / 1000).toFixed(1)}s`);
+    if (failedAgents.length > 0) {
+      logger.warn(`   ⚠️ Degraded mode: agents ${failedAgents.join(', ')} failed`);
+    }
 
     return finalResponse;
   }
 
-  /**
-   * Build final ContractReviewResponse from all outputs
-   */
+  // ==========================================
+  // FIX #21: Fallback outputs for degraded mode
+  // ==========================================
+
+  private createFallbackProvocateurOutput(): ProvocateurOutput {
+    return {
+      agentId: 'provocateur',
+      role: 'provocateur',
+      confidence: 0,
+      timestamp: new Date().toISOString(),
+      tokensUsed: { input: 0, output: 0 },
+      latencyMs: 0,
+      critique: {
+        flaws: [],
+        maxSeverity: 0,
+        overallAssessment: 'Агент Провокатор недоступний — аналіз неповний',
+      },
+    } as ProvocateurOutput;
+  }
+
+  private createFallbackValidatorOutput(): ValidatorOutput {
+    return {
+      agentId: 'validator',
+      role: 'validator',
+      confidence: 0,
+      timestamp: new Date().toISOString(),
+      tokensUsed: { input: 0, output: 0 },
+      latencyMs: 0,
+      validation: {
+        completenessScore: 0,
+        verdict: 'NEEDS_REVIEW' as any,
+        contradictions: [],
+        missingAreas: ['Валідація не виконана — агент недоступний'],
+        overallAssessment: 'Агент Валідатор недоступний — результати не перевірені',
+      },
+    } as ValidatorOutput;
+  }
+
+  private createFallbackSynthesizerOutput(expertOutput: ExpertOutput): SynthesizerOutput {
+    return {
+      agentId: 'synthesizer',
+      role: 'synthesizer',
+      confidence: expertOutput.confidence * 0.7, // Lower confidence without synthesis
+      timestamp: new Date().toISOString(),
+      tokensUsed: { input: 0, output: 0 },
+      latencyMs: 0,
+      synthesis: {
+        summary: expertOutput.analysis.executiveSummary + '\n\n⚠️ Увага: Аналіз неповний — Синтезатор недоступний.',
+        confidence: expertOutput.confidence * 0.7,
+        criticalRisks: expertOutput.analysis.keyIssues
+          .filter(i => i.severity >= 4)
+          .map(i => ({
+            title: i.title,
+            description: i.description,
+            impact: 'Визначено експертом',
+            mitigation: i.recommendation || 'Потребує додаткового аналізу',
+          })),
+        recommendations: expertOutput.analysis.recommendations || [],
+      },
+    } as SynthesizerOutput;
+  }
+
+  // ==========================================
+  // Build final response
+  // ==========================================
+
   private buildFinalResponse(
     synthesizerOutput: SynthesizerOutput,
     expertOutput: ExpertOutput,
     provocateurOutput: ProvocateurOutput,
     validatorOutput: ValidatorOutput,
     metadata: {
-      contractType?: string;
+      contractType?: ContractType;
       jurisdiction?: string;
       totalCost: number;
       processingTimeMs: number;
+      failedAgents?: string[];
     }
   ): ContractReviewResponse {
+    // FIX #21: Append degraded mode warning to summary
+    let summary = synthesizerOutput.synthesis.summary;
+    if (metadata.failedAgents && metadata.failedAgents.length > 0) {
+      summary += `\n\n⚠️ УВАГА: Аналіз проведено в неповному режимі. Недоступні агенти: ${metadata.failedAgents.join(', ')}. Рекомендуємо повторити аналіз пізніше для повного звіту.`;
+    }
+
     return {
-      summary: synthesizerOutput.synthesis.summary,
+      summary,
       overallRiskScore: expertOutput.analysis.overallRiskScore,
       confidence: synthesizerOutput.synthesis.confidence,
 
@@ -175,7 +243,7 @@ export class ReviewOrchestrator {
       },
 
       metadata: {
-        contractType: metadata.contractType as any,
+        contractType: metadata.contractType || 'custom',
         jurisdiction: metadata.jurisdiction,
         analyzedAt: new Date().toISOString(),
         totalCost: metadata.totalCost,
@@ -184,72 +252,40 @@ export class ReviewOrchestrator {
     };
   }
 
-  /**
-   * Check if we should stop iteration
-   */
   private checkStopCriteria(
     expertOutput: ExpertOutput,
     provocateurOutput: ProvocateurOutput,
     validatorOutput: ValidatorOutput,
     currentRound: number
   ): { shouldStop: boolean; reason: string } {
-    // Criteria 1: Max rounds reached
     if (currentRound >= this.config.maxRounds) {
       return { shouldStop: true, reason: 'Max rounds reached' };
     }
 
-    // Criteria 2: No high-severity issues
     const hasHighSeverityIssues =
-      expertOutput.analysis.keyIssues.some(
-        (i) => i.severity >= this.config.maxSeverityThreshold
-      ) ||
-      provocateurOutput.critique.flaws.some(
-        (f) => f.severity >= this.config.maxSeverityThreshold
-      );
+      expertOutput.analysis.keyIssues.some(i => i.severity >= this.config.maxSeverityThreshold) ||
+      provocateurOutput.critique.flaws.some(f => f.severity >= this.config.maxSeverityThreshold);
 
     if (!hasHighSeverityIssues) {
-      return {
-        shouldStop: true,
-        reason: `No issues with severity >= ${this.config.maxSeverityThreshold}`,
-      };
+      return { shouldStop: true, reason: `No issues with severity >= ${this.config.maxSeverityThreshold}` };
     }
 
-    // Criteria 3: High confidence from all agents
-    const avgConfidence =
-      (expertOutput.confidence +
-        provocateurOutput.confidence +
-        validatorOutput.confidence) /
-      3;
-
+    const avgConfidence = (expertOutput.confidence + provocateurOutput.confidence + validatorOutput.confidence) / 3;
     if (avgConfidence >= this.config.minConfidence) {
-      return {
-        shouldStop: true,
-        reason: `Average confidence ${(avgConfidence * 100).toFixed(0)}% >= ${(this.config.minConfidence * 100).toFixed(0)}%`,
-      };
+      return { shouldStop: true, reason: `Average confidence ${(avgConfidence * 100).toFixed(0)}% >= ${(this.config.minConfidence * 100).toFixed(0)}%` };
     }
 
-    // Criteria 4: Validator says COMPLETE
     if (validatorOutput.validation.verdict === 'COMPLETE') {
       return { shouldStop: true, reason: 'Validator verdict: COMPLETE' };
     }
 
-    // Continue if none of the stop criteria met
-    return {
-      shouldStop: false,
-      reason: `High severity issues remain (${hasHighSeverityIssues}), confidence low (${(avgConfidence * 100).toFixed(0)}%)`,
-    };
+    return { shouldStop: false, reason: `High severity issues remain, confidence low (${(avgConfidence * 100).toFixed(0)}%)` };
   }
 
-  /**
-   * Get configuration
-   */
   getConfig(): ReviewOrchestratorConfig {
     return { ...this.config };
   }
 
-  /**
-   * Update configuration
-   */
   setConfig(config: Partial<ReviewOrchestratorConfig>): void {
     this.config = { ...this.config, ...config };
   }
@@ -259,9 +295,6 @@ export class ReviewOrchestrator {
 // CONVENIENCE FUNCTION
 // ==========================================
 
-/**
- * Quick way to analyze contract
- */
 export async function analyzeContract(
   contractText: string,
   options?: {
@@ -273,7 +306,6 @@ export async function analyzeContract(
   }
 ): Promise<ContractReviewResponse> {
   const orchestrator = new ReviewOrchestrator(options?.config);
-
   const request: ContractReviewRequest = {
     contractText,
     contractType: options?.contractType,
@@ -281,6 +313,5 @@ export async function analyzeContract(
     specificQuestions: options?.questions,
     focusAreas: options?.focusAreas,
   };
-
   return orchestrator.analyze(request);
 }
