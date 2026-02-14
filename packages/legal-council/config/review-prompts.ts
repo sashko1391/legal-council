@@ -1,9 +1,13 @@
 /**
  * Contract Review System Prompts - VALIDATOR IMPROVED
  * Fixed JSON escaping issues
+ * 
+ * UPDATE (Feb 14, 2026): Removed ukrainianLawService import.
+ * Law context now injected via RAG in expert.ts (Pinecone semantic search).
  */
 
-import { ukrainianLawService } from '../services/ukrainian-law-service';
+// ukrainianLawService replaced by RAG in expert.ts
+// import { ukrainianLawService } from '../services/ukrainian-law-service';
 
 // ==========================================
 // EXPERT AGENT (Primary Analyst)
@@ -30,7 +34,7 @@ OUTPUT FORMAT (strict JSON):
       "severity": 1-5,
       "clauseReference": "Section X.Y or line numbers",
       "category": "ambiguous_language" | "missing_protection" | "liability_gap" | "unfavorable_terms" | "compliance_risk" | "termination_risk",
-      "legalBasis": "Reference to Ukrainian law (e.g., ЦКУ стаття 626)"
+      "legalBasis": "Reference to Ukrainian law (e.g., ЦКУ Стаття 626)"
     }
   ],
   "clauseAnalysis": [
@@ -57,7 +61,7 @@ OUTPUT FORMAT (strict JSON):
 
 ⚠️ JSON FORMATTING RULES (CRITICAL):
 - NEVER use unescaped quotes inside strings
-- If you need quotes, use single quotes ' or escape them \"
+- If you need quotes, use single quotes ' or escape them \\"
 - Avoid special characters that break JSON
 - Keep text simple and JSON-safe
 - Example: Instead of "warranties" use warranties (no quotes)
@@ -66,7 +70,7 @@ OUTPUT FORMAT (strict JSON):
 ANALYSIS REQUIREMENTS:
 1. **Focus on TOP 7 issues** - highest severity/impact only
 2. **Specificity**: Always reference exact clause numbers/sections
-3. **Legal Grounding**: Cite Ukrainian law (ЦКУ, ГКУ, КЗпП)
+3. **Legal Grounding**: Cite Ukrainian law (ЦКУ, КЗпП) — use articles from RELEVANT UKRAINIAN LAW ARTICLES section in user prompt
 4. **Risk Calibration**: 
    - Severity 5: Contract-breaking, immediate legal exposure
    - Severity 4: Significant risk, likely to cause problems
@@ -80,15 +84,11 @@ ANALYSIS REQUIREMENTS:
 UKRAINIAN LAW CONTEXT:
 - Default to Ukrainian jurisdiction unless specified otherwise
 - Reference Цивільний кодекс України (ЦКУ) for general contracts
-- Reference Господарський кодекс України (ГКУ) for commercial agreements
+- ГКУ (Господарський кодекс) скасовано з 28.08.2025 — НЕ посилайтесь на нього
 - Reference Кодекс законів про працю (КЗпП) for employment contracts
+- Use SPECIFIC article numbers from the RELEVANT UKRAINIAN LAW ARTICLES provided in the user prompt
 
 TONE: Professional, precise, balanced.
-
-🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
-ВСІ текстові значення у JSON (summary, description, title, action, rationale, specificLanguage, issue, exploitationScenario, suggestedFix) ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
-JSON ключі залишаються англійською (executiveSummary, keyIssues, severity тощо).
-Посилання на закони: "ЦКУ ст. 626", "ГКУ ст. 180", "КЗпП ст. 36" тощо.
 
 CRITICAL: 
 - Output ONLY valid JSON
@@ -133,7 +133,7 @@ OUTPUT FORMAT (strict JSON):
 
 ⚠️ JSON FORMATTING RULES (CRITICAL):
 - NEVER use unescaped quotes inside strings
-- Use single quotes or escape: \"
+- Use single quotes or escape: \\"
 - Keep JSON valid and parseable
 - No special characters that break JSON
 
@@ -155,10 +155,6 @@ SEVERITY CALIBRATION:
 - 1 = "Theoretical issue, unlikely to matter"
 
 TONE: Aggressive, creative, ruthless.
-
-🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
-ВСІ текстові значення у JSON ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
-JSON ключі залишаються англійською.
 
 CRITICAL:
 - Output ONLY valid JSON
@@ -202,7 +198,7 @@ OUTPUT FORMAT (strict JSON):
 - Replace "it's" with "it is"
 - Replace "didn't" with "did not"
 - Keep strings simple and JSON-safe
-- Example BAD: "missing \"IP rights\" clause" 
+- Example BAD: "missing \\"IP rights\\" clause" 
 - Example GOOD: "missing IP rights clause"
 - Example BAD: "Expert didn't address..."
 - Example GOOD: "Expert did not address..."
@@ -231,10 +227,6 @@ VERDICT LOGIC:
 - NEEDS_REVISION: Missing sections, major contradictions
 
 TONE: Strict but fair.
-
-🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
-ВСІ текстові значення у JSON ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
-JSON ключі залишаються англійською.
 
 CRITICAL: 
 - Output ONLY valid JSON
@@ -270,7 +262,7 @@ OUTPUT FORMAT (strict JSON):
   ],
   "confidence": 0.0-1.0,
   "keyDisagreements": [
-    "Expert vs Provocateur disagreed on X. Here's why: ..."
+    "Expert vs Provocateur disagreed on X. Here is why: ..."
   ]
 }
 
@@ -296,11 +288,6 @@ CONFIDENCE CALIBRATION:
 
 TONE: Confident, clear, actionable.
 
-🇺🇦 МОВА ВІДПОВІДІ: УКРАЇНСЬКА
-ВСІ текстові значення у JSON (summary, title, description, impact, mitigation, action, rationale, specificLanguage) ПОВИННІ бути УКРАЇНСЬКОЮ МОВОЮ.
-JSON ключі залишаються англійською.
-Стиль: як досвідчений український юрист пише клієнту.
-
 CRITICAL: 
 - Output ONLY valid JSON
 - NO unescaped quotes in strings`;
@@ -313,15 +300,10 @@ export async function buildExpertPrompt(
   contractType?: string,
   jurisdiction?: string
 ): Promise<string> {
-  let prompt = EXPERT_PROMPT;
-  
-  // Add Ukrainian law context if jurisdiction is Ukraine
-  if (!jurisdiction || jurisdiction.toLowerCase().includes('ukrain')) {
-    const lawContext = await ukrainianLawService.getLegalContext(contractType || 'general');
-    prompt += `\n\n${lawContext}`;
-  }
-  
-  return prompt;
+  // Law context is now injected by ExpertAgent via RAG (Pinecone semantic search)
+  // instead of hardcoded articles from ukrainianLawService.
+  // See: packages/legal-council/agents/review/expert.ts → findRelevantLaws()
+  return EXPERT_PROMPT;
 }
 
 export async function buildProvocateurPrompt(): Promise<string> {

@@ -6,6 +6,9 @@
  * FIX #16: Logger
  * FIX #21 (Feb 13, 2026): Graceful degradation — if an agent fails,
  *   pipeline continues with remaining agents and flags incomplete analysis.
+ * FIX L1 (Feb 14, 2026): checkStopCriteria now called in analyze loop.
+ *   Previously defined but never invoked — multi-round iteration was dead code.
+ *   Now runs up to maxRounds, stopping early when criteria met.
  */
 
 import { ExpertAgent } from '../agents/review/expert';
@@ -55,6 +58,10 @@ export class ReviewOrchestrator {
 
   /**
    * Main orchestration method with graceful degradation
+   * 
+   * FIX L1: Now supports multi-round iteration via checkStopCriteria.
+   * Round 1 always runs. Subsequent rounds only if stop criteria not met.
+   * In practice most contracts resolve in 1 round (confidence ≥ 85%).
    */
   async analyze(request: ContractReviewRequest): Promise<ContractReviewResponse> {
     const startTime = Date.now();
@@ -64,64 +71,99 @@ export class ReviewOrchestrator {
     logger.info('🛡️ Legal Council Review Session Starting...');
     logger.info(`   Max rounds: ${this.config.maxRounds}`);
 
-    // ========================
-    // Round 1: Expert Analysis (REQUIRED — fails entire pipeline if down)
-    // ========================
-    logger.info('\n📋 Round 1: Expert Analysis');
-    const expertOutput = await this.expert.analyze(request);
-    totalCost += this.expert.calculateCost(expertOutput.tokensUsed);
-    logger.info(`   ✓ Found ${expertOutput.analysis.keyIssues.length} issues, risk ${expertOutput.analysis.overallRiskScore}/10`);
+    let expertOutput: ExpertOutput;
+    let provocateurOutput: ProvocateurOutput;
+    let validatorOutput: ValidatorOutput;
 
     // ========================
-    // Round 2: Provocateur Critique (FIX #21: OPTIONAL — degraded mode if fails)
+    // FIX L1: Multi-round loop (was previously single-pass)
     // ========================
-    let provocateurOutput: ProvocateurOutput | null = null;
-    try {
-      logger.info('\n😈 Round 2: Provocateur Critique');
-      provocateurOutput = await this.provocateur.critique(request.contractText, expertOutput);
-      totalCost += this.provocateur.calculateCost(provocateurOutput.tokensUsed);
-      logger.info(`   ✓ Found ${provocateurOutput.critique.flaws.length} flaws`);
-    } catch (error) {
-      logger.warn(`   ⚠️ Provocateur failed, continuing in degraded mode: ${(error as Error).message}`);
-      failedAgents.push('provocateur');
-      provocateurOutput = this.createFallbackProvocateurOutput();
+    for (let round = 1; round <= this.config.maxRounds; round++) {
+      logger.info(`\n━━━ Round ${round}/${this.config.maxRounds} ━━━`);
+
+      // ========================
+      // Step 1: Expert Analysis (REQUIRED — fails entire pipeline if down)
+      // ========================
+      logger.info('\n📋 Expert Analysis');
+      expertOutput = await this.expert.analyze(request);
+      totalCost += this.expert.calculateCost(expertOutput.tokensUsed);
+      logger.info(`   ✓ Found ${expertOutput.analysis.keyIssues.length} issues, risk ${expertOutput.analysis.overallRiskScore}/10`);
+
+      // ========================
+      // Step 2: Provocateur Critique (OPTIONAL — degraded mode if fails)
+      // ========================
+      try {
+        logger.info('\n😈 Provocateur Critique');
+        provocateurOutput = await this.provocateur.critique(request.contractText, expertOutput);
+        totalCost += this.provocateur.calculateCost(provocateurOutput.tokensUsed);
+        logger.info(`   ✓ Found ${provocateurOutput.critique.flaws.length} flaws`);
+      } catch (error) {
+        logger.warn(`   ⚠️ Provocateur failed, continuing in degraded mode: ${(error as Error).message}`);
+        failedAgents.push('provocateur');
+        provocateurOutput = this.createFallbackProvocateurOutput();
+      }
+
+      // ========================
+      // Step 3: Validator (OPTIONAL — degraded mode if fails)
+      // ========================
+      try {
+        logger.info('\n🔍 Validator Check');
+        validatorOutput = await this.validator.validate(request, expertOutput, provocateurOutput!);
+        totalCost += this.validator.calculateCost(validatorOutput.tokensUsed);
+        logger.info(`   ✓ Completeness: ${validatorOutput.validation.completenessScore}%, verdict: ${validatorOutput.validation.verdict}`);
+      } catch (error) {
+        logger.warn(`   ⚠️ Validator failed, continuing in degraded mode: ${(error as Error).message}`);
+        failedAgents.push('validator');
+        validatorOutput = this.createFallbackValidatorOutput();
+      }
+
+      // ========================
+      // FIX L1: Check stop criteria — break early if analysis is sufficient
+      // ========================
+      const stopCheck = this.checkStopCriteria(expertOutput, provocateurOutput!, validatorOutput!, round);
+      logger.info(`   Stop check: ${stopCheck.reason}`);
+
+      if (stopCheck.shouldStop) {
+        if (round < this.config.maxRounds) {
+          logger.info(`   → Stopping early at round ${round}: ${stopCheck.reason}`);
+        }
+        break;
+      }
+
+      // If continuing to next round, augment request with feedback from validator
+      if (validatorOutput!.validation.missingAreas?.length > 0) {
+        logger.info(`   → Round ${round + 1} will focus on: ${validatorOutput!.validation.missingAreas.join(', ')}`);
+        // Inject validator feedback as focus areas for next round
+        request = {
+          ...request,
+          focusAreas: [
+            ...(request.focusAreas || []),
+            ...validatorOutput!.validation.missingAreas,
+          ] as any,
+        };
+      }
     }
 
     // ========================
-    // Round 3: Validator (FIX #21: OPTIONAL — degraded mode if fails)
+    // Final: Synthesizer (OPTIONAL — build basic response if fails)
     // ========================
-    let validatorOutput: ValidatorOutput | null = null;
-    try {
-      logger.info('\n🔍 Round 3: Validator Check');
-      validatorOutput = await this.validator.validate(request, expertOutput, provocateurOutput!);
-      totalCost += this.validator.calculateCost(validatorOutput.tokensUsed);
-      logger.info(`   ✓ Completeness: ${validatorOutput.validation.completenessScore}%, verdict: ${validatorOutput.validation.verdict}`);
-    } catch (error) {
-      logger.warn(`   ⚠️ Validator failed, continuing in degraded mode: ${(error as Error).message}`);
-      failedAgents.push('validator');
-      validatorOutput = this.createFallbackValidatorOutput();
-    }
-
-    // ========================
-    // Final: Synthesizer (FIX #21: OPTIONAL — build basic response if fails)
-    // ========================
-    let synthesizerOutput: SynthesizerOutput | null = null;
+    let synthesizerOutput: SynthesizerOutput;
     try {
       logger.info('\n📝 Final: Synthesizer');
-      synthesizerOutput = await this.synthesizer.synthesize(expertOutput, provocateurOutput!, validatorOutput!);
+      synthesizerOutput = await this.synthesizer.synthesize(expertOutput!, provocateurOutput!, validatorOutput!);
       totalCost += this.synthesizer.calculateCost(synthesizerOutput.tokensUsed);
       logger.info(`   ✓ Critical risks: ${synthesizerOutput.synthesis.criticalRisks.length}`);
     } catch (error) {
       logger.warn(`   ⚠️ Synthesizer failed, building response from Expert output: ${(error as Error).message}`);
       failedAgents.push('synthesizer');
-      synthesizerOutput = this.createFallbackSynthesizerOutput(expertOutput);
+      synthesizerOutput = this.createFallbackSynthesizerOutput(expertOutput!);
     }
 
     // Build final response
     const processingTimeMs = Date.now() - startTime;
     const finalResponse = this.buildFinalResponse(
       synthesizerOutput!,
-      expertOutput,
+      expertOutput!,
       provocateurOutput!,
       validatorOutput!,
       {
@@ -185,7 +227,7 @@ export class ReviewOrchestrator {
     return {
       agentId: 'synthesizer',
       role: 'synthesizer',
-      confidence: expertOutput.confidence * 0.7, // Lower confidence without synthesis
+      confidence: expertOutput.confidence * 0.7,
       timestamp: new Date().toISOString(),
       tokensUsed: { input: 0, output: 0 },
       latencyMs: 0,
@@ -222,7 +264,6 @@ export class ReviewOrchestrator {
       failedAgents?: string[];
     }
   ): ContractReviewResponse {
-    // FIX #21: Append degraded mode warning to summary
     let summary = synthesizerOutput.synthesis.summary;
     if (metadata.failedAgents && metadata.failedAgents.length > 0) {
       summary += `\n\n⚠️ УВАГА: Аналіз проведено в неповному режимі. Недоступні агенти: ${metadata.failedAgents.join(', ')}. Рекомендуємо повторити аналіз пізніше для повного звіту.`;
@@ -251,6 +292,10 @@ export class ReviewOrchestrator {
       },
     };
   }
+
+  // ==========================================
+  // FIX L1: Stop criteria — now called in analyze() loop
+  // ==========================================
 
   private checkStopCriteria(
     expertOutput: ExpertOutput,

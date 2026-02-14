@@ -10,6 +10,8 @@
  * - #12: AbortController timeout (120s) for all API calls
  * - #13: JSON repair fallback (trailing commas, single quotes, unescaped newlines)
  * - #16: Proper logger instead of console.log (no contract text leak in production)
+ * - C3 (Feb 14, 2026): AbortSignal actually passed to all SDK calls
+ * - H3 (Feb 14, 2026): Apostrophe-safe JSON repair (Ukrainian об'єкт, обов'язок)
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -175,7 +177,7 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
   }
 
   // ==========================================================================
-  // ANTHROPIC
+  // ANTHROPIC — FIX C3: signal passed to SDK
   // ==========================================================================
 
   private async callAnthropic(userPrompt: string): Promise<{
@@ -186,16 +188,19 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
     let lastError: any;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      // FIX #12: Timeout
       const timeout = createTimeout();
       try {
-        const message = await client.messages.create({
-          model: this.config.model,
-          max_tokens: this.config.maxTokens,
-          temperature: this.config.temperature,
-          system: this.systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-        });
+        // FIX C3: Pass AbortSignal as second argument (request options)
+        const message = await client.messages.create(
+          {
+            model: this.config.model,
+            max_tokens: this.config.maxTokens,
+            temperature: this.config.temperature,
+            system: this.systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+          },
+          { signal: timeout.signal }
+        );
         timeout.clear();
 
         const textContent = message.content.find((c) => c.type === 'text');
@@ -221,7 +226,7 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
   }
 
   // ==========================================================================
-  // OPENAI
+  // OPENAI — FIX C3: signal passed to SDK
   // ==========================================================================
 
   private async callOpenAI(userPrompt: string): Promise<{
@@ -234,15 +239,19 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       const timeout = createTimeout();
       try {
-        const completion = await client.chat.completions.create({
-          model: this.config.model,
-          max_tokens: this.config.maxTokens,
-          temperature: this.config.temperature,
-          messages: [
-            { role: 'system', content: this.systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-        });
+        // FIX C3: Pass AbortSignal as second argument (request options)
+        const completion = await client.chat.completions.create(
+          {
+            model: this.config.model,
+            max_tokens: this.config.maxTokens,
+            temperature: this.config.temperature,
+            messages: [
+              { role: 'system', content: this.systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+          },
+          { signal: timeout.signal }
+        );
         timeout.clear();
 
         const choice = completion.choices[0];
@@ -265,7 +274,7 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
   }
 
   // ==========================================================================
-  // GOOGLE GEMINI (#7, #8, #9)
+  // GOOGLE GEMINI (#7, #8, #9) — FIX C3: timeout via requestOptions
   // ==========================================================================
 
   private async callGoogle(userPrompt: string): Promise<{
@@ -273,10 +282,15 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
     tokensUsed: { input: number; output: number };
   }> {
     const client = createGoogleClient();
-    const model = client.getGenerativeModel({
-      model: this.config.model,
-      systemInstruction: this.systemPrompt, // FIX #7
-    });
+    // FIX C3: Gemini SDK doesn't support AbortSignal on generateContent,
+    // so we use requestOptions.timeout on the model itself
+    const model = client.getGenerativeModel(
+      {
+        model: this.config.model,
+        systemInstruction: this.systemPrompt, // FIX #7
+      },
+      { timeout: API_TIMEOUT_MS } // FIX C3: request-level timeout
+    );
 
     let lastError: any;
 
@@ -362,7 +376,11 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
   }
 
   /**
-   * FIX #13: Attempt to repair common JSON issues from LLM output
+   * FIX #13 + H3: Attempt to repair common JSON issues from LLM output
+   * 
+   * H3: Apostrophe-safe — Ukrainian text uses ' inside words (об'єкт, обов'язок).
+   * Old code replaced ALL single quotes, corrupting Ukrainian text.
+   * New code only replaces single quotes used as JSON delimiters.
    */
   private repairJson(json: string): string {
     let repaired = json;
@@ -371,13 +389,17 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
     // e.g., {"a": 1, "b": 2,} → {"a": 1, "b": 2}
     repaired = repaired.replace(/,\s*([\]}])/g, '$1');
 
-    // Fix 2: Replace single quotes with double quotes (outside of strings)
-    // Simple approach: only replace if not inside a double-quoted string
-    // This handles: {'key': 'value'} → {"key": "value"}
-    repaired = repaired.replace(/'/g, '"');
+    // Fix 2: Replace single-quoted JSON delimiters (NOT Ukrainian apostrophes)
+    // Ukrainian: об'єкт, обов'язок, з'єднання — apostrophe INSIDE a word
+    // JSON delimiters: {'key': 'value'} — apostrophe AROUND keys/values
+    // Strategy: replace ' only when it appears as a string delimiter
+    //   - After : , [ { (opening a value)
+    //   - Before : ] } , (closing a value/key)
+    repaired = repaired.replace(/([:,\[{])\s*'([^']*?)'\s*(?=[,\]}:])/g, '$1"$2"');
+    // Catch remaining key patterns: 'key':
+    repaired = repaired.replace(/'([^']*?)'(\s*:)/g, '"$1"$2');
 
     // Fix 3: Fix unescaped newlines inside strings
-    // Match strings and escape newlines within them
     repaired = repaired.replace(/"([^"]*?)"/g, (match) => {
       return match
         .replace(/\n/g, '\\n')

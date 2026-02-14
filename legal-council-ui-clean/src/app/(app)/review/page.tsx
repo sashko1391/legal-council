@@ -8,17 +8,19 @@
  * - #2: Maps ContractReviewResponse (criticalRisks, recommendations, detailedAnalysis)
  *       to RiskItem[] that RiskDashboard expects
  * - #3: Removed setTimeout race conditions — agent progress is now sequential
- *       and tied to actual API response lifecycle
+ *
+ * FIX H2 (Feb 14, 2026): Backend sends `keyIssues`, not `issues`
+ * FIX L2 (Feb 14, 2026): "Зберегти звіт" button now downloads JSON report
  */
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, Button } from '@/shared/ui'
 import { SplitView, RiskDashboard, AgentProgress } from '@/shared/components'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { RiskSeverity } from '@/shared/types'
 
 // ==========================================
-// FIX #2: Map backend ContractReviewResponse → RiskItem[]
+// Backend response types
 // ==========================================
 
 interface BackendCriticalRisk {
@@ -35,6 +37,7 @@ interface BackendRecommendation {
   specificLanguage?: string
 }
 
+// FIX H2: Added clauseReference and category
 interface BackendIssue {
   id: string
   severity: number
@@ -42,8 +45,11 @@ interface BackendIssue {
   description: string
   legalBasis?: string
   recommendation?: string
+  clauseReference?: string
+  category?: string
 }
 
+// FIX H2: keyIssues (not issues)
 interface ContractReviewResponse {
   summary: string
   overallRiskScore: number
@@ -52,15 +58,19 @@ interface ContractReviewResponse {
   recommendations: BackendRecommendation[]
   detailedAnalysis: {
     expertAnalysis: {
-      issues: BackendIssue[]
+      executiveSummary: string
+      keyIssues: BackendIssue[]
+      clauseAnalysis: any[]
       overallRiskScore: number
-      recommendations: string[]
+      recommendations: any[]
     }
     flawsFound: Array<{
       id: string
       severity: number
-      title: string
-      description: string
+      issue: string
+      clauseReference?: string
+      exploitationScenario?: string
+      suggestedFix?: string
     }>
     validationResults: any
   }
@@ -73,15 +83,15 @@ interface ContractReviewResponse {
   }
 }
 
-/**
- * Converts the backend ContractReviewResponse into the RiskItem[]
- * format that RiskDashboard component expects.
- */
+// ==========================================
+// Map backend response → RiskItem[]
+// ==========================================
+
 function mapResponseToRisks(response: ContractReviewResponse): any[] {
   const risks: any[] = []
   let riskId = 1
 
-  // 1. Map critical risks (severity 5)
+  // 1. Critical risks (severity 5)
   if (response.criticalRisks) {
     for (const cr of response.criticalRisks) {
       risks.push({
@@ -97,10 +107,9 @@ function mapResponseToRisks(response: ContractReviewResponse): any[] {
     }
   }
 
-  // 2. Map issues from expert analysis (with their real severities)
-  if (response.detailedAnalysis?.expertAnalysis?.issues) {
-    for (const issue of response.detailedAnalysis.expertAnalysis.issues) {
-      // Skip if already mapped as critical
+  // 2. Expert issues — FIX H2: keyIssues
+  if (response.detailedAnalysis?.expertAnalysis?.keyIssues) {
+    for (const issue of response.detailedAnalysis.expertAnalysis.keyIssues) {
       const alreadyMapped = risks.some(
         (r) => r.title === issue.title && r.severity === issue.severity
       )
@@ -113,31 +122,34 @@ function mapResponseToRisks(response: ContractReviewResponse): any[] {
         description: issue.description,
         legalCitation: issue.legalBasis,
         recommendation: issue.recommendation,
+        contractExcerpt: issue.clauseReference,
         confidence: Math.round((response.confidence || 0.85) * 100),
         agentName: 'Експерт',
       })
     }
   }
 
-  // 3. Map flaws from provocateur (with their severities)
+  // 3. Provocateur flaws
   if (response.detailedAnalysis?.flawsFound) {
     for (const flaw of response.detailedAnalysis.flawsFound) {
-      // Skip duplicates by title
-      const alreadyMapped = risks.some((r) => r.title === flaw.title)
+      const flawTitle = flaw.issue || flaw.id
+      const alreadyMapped = risks.some((r) => r.title === flawTitle)
       if (alreadyMapped) continue
 
       risks.push({
         id: String(riskId++),
         severity: (Math.min(5, Math.max(1, flaw.severity)) as RiskSeverity),
-        title: flaw.title,
-        description: flaw.description,
+        title: flawTitle,
+        description: flaw.exploitationScenario || '',
+        recommendation: flaw.suggestedFix,
+        contractExcerpt: flaw.clauseReference,
         confidence: Math.round((response.confidence || 0.85) * 100),
         agentName: 'Провокатор',
       })
     }
   }
 
-  // 4. Map recommendations as low-severity informational items
+  // 4. Recommendations as low-severity informational items
   if (response.recommendations) {
     for (const rec of response.recommendations) {
       const severity = rec.priority === 'high' ? 3 : rec.priority === 'medium' ? 2 : 1
@@ -157,6 +169,51 @@ function mapResponseToRisks(response: ContractReviewResponse): any[] {
 }
 
 // ==========================================
+// FIX L2: Save report as JSON download
+// ==========================================
+
+function downloadReport(
+  response: ContractReviewResponse | null,
+  risks: any[],
+  contractType: string
+) {
+  if (!response) return
+
+  const report = {
+    title: 'AGENTIS — Звіт Аналізу Контракту',
+    generatedAt: new Date().toISOString(),
+    contractType,
+    summary: response.summary,
+    overallRiskScore: response.overallRiskScore,
+    confidence: response.confidence,
+    risks: risks.map((r) => ({
+      severity: r.severity,
+      title: r.title,
+      description: r.description,
+      legalCitation: r.legalCitation,
+      recommendation: r.recommendation,
+      agent: r.agentName,
+    })),
+    criticalRisks: response.criticalRisks,
+    recommendations: response.recommendations,
+    metadata: response.metadata,
+  }
+
+  const blob = new Blob([JSON.stringify(report, null, 2)], {
+    type: 'application/json',
+  })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const date = new Date().toISOString().slice(0, 10)
+  a.download = `agentis-report-${contractType}-${date}.json`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+// ==========================================
 // REVIEW PAGE COMPONENT
 // ==========================================
 
@@ -169,6 +226,8 @@ export default function ReviewPage() {
   const [error, setError] = useState<string | null>(null)
   const [summary, setSummary] = useState<string>('')
   const [overallScore, setOverallScore] = useState<number>(0)
+  // FIX L2: Store raw response for report download
+  const [rawResponse, setRawResponse] = useState<ContractReviewResponse | null>(null)
 
   const {
     isAnalyzing,
@@ -187,21 +246,14 @@ export default function ReviewPage() {
 
     setIsLoading(true)
     setError(null)
+    setRawResponse(null)
     startAnalysis()
     setShowResults(true)
 
     try {
-      // ================================================================
-      // FIX #3: Sequential agent progress tied to API lifecycle
-      // No more setTimeout race conditions — progress updates happen
-      // in order and reflect actual processing stages
-      // ================================================================
-
-      // Stage 1: Expert starts analyzing
+      // Stage 1: Expert
       updateAgentStatus('expert', 'running', 'Аналізую відповідність законодавству...')
 
-      // FIX #1: Call real backend API, not the mock route
-      // The proxy route in /api/review forwards to the real backend
       const response = await fetch('/api/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -218,12 +270,11 @@ export default function ReviewPage() {
 
       const result = await response.json()
 
-      // Stage 2: Expert completed — API returned, parse results
+      // Stage 2: Expert done
       updateAgentStatus('expert', 'completed', 'Аналіз законодавства завершено')
 
-      // Stage 3: Provocateur processing (already done on backend, show progress)
+      // Stage 3: Provocateur
       updateAgentStatus('provocateur', 'running', 'Перевіряю приховані ризики...')
-      // Small delay for UX — let user see each agent transition
       await new Promise((r) => setTimeout(r, 300))
       updateAgentStatus('provocateur', 'completed', 'Слабкі місця виявлено')
 
@@ -232,16 +283,15 @@ export default function ReviewPage() {
       await new Promise((r) => setTimeout(r, 300))
       updateAgentStatus('validator', 'completed', 'Суперечностей не знайдено')
 
-      // Stage 5: Synthesizer — map results
+      // Stage 5: Synthesizer
       updateAgentStatus('synthesizer', 'running', 'Формую фінальний звіт...')
 
-      // FIX #2: Properly map backend ContractReviewResponse to RiskItem[]
       const reviewData: ContractReviewResponse = result.data
       const mappedRisks = mapResponseToRisks(reviewData)
 
-      // Store additional data
       setSummary(reviewData.summary || '')
       setOverallScore(reviewData.overallRiskScore || 0)
+      setRawResponse(reviewData) // FIX L2
 
       await new Promise((r) => setTimeout(r, 300))
       updateAgentStatus('synthesizer', 'completed', 'Звіт готовий')
@@ -270,22 +320,23 @@ export default function ReviewPage() {
     setError(null)
     setSummary('')
     setOverallScore(0)
+    setRawResponse(null)
     resetAnalysis()
   }
 
+  // FIX L2: Save report handler
+  const handleSaveReport = useCallback(() => {
+    downloadReport(rawResponse, risks, contractType)
+  }, [rawResponse, risks, contractType])
+
   const handleRiskClick = (risk: any) => {
-    // TODO: Implement "The Tether" animation - scroll to and highlight text
     console.log('Risk clicked:', risk)
-    if (risk.lineNumber) {
-      // Scroll to line in contract text
-    }
   }
 
   // BEFORE analysis: Show upload form
   if (!showResults) {
     return (
       <div className="container mx-auto max-w-4xl p-6">
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-heading-lg">Аналіз Контракту</h1>
           <p className="text-gray-500 mt-2">
@@ -298,7 +349,6 @@ export default function ReviewPage() {
             <CardTitle>Введіть Контракт</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Contract Type */}
             <div>
               <label className="mb-2 block text-sm font-medium">
                 Тип Договору
@@ -318,7 +368,6 @@ export default function ReviewPage() {
               </select>
             </div>
 
-            {/* Contract Text */}
             <div>
               <label className="mb-2 block text-sm font-medium">
                 Текст Договору
@@ -340,7 +389,6 @@ export default function ReviewPage() {
               </p>
             </div>
 
-            {/* Actions */}
             <div className="flex gap-3">
               <Button
                 onClick={handleAnalyze}
@@ -353,7 +401,6 @@ export default function ReviewPage() {
           </CardContent>
         </Card>
 
-        {/* Features info */}
         <div className="mt-8 grid gap-6 md:grid-cols-2">
           <Card>
             <CardContent className="pt-6">
@@ -390,7 +437,6 @@ export default function ReviewPage() {
   // DURING/AFTER analysis: Show split view
   return (
     <div className="flex flex-col">
-      {/* Top Bar */}
       <div className="flex items-center justify-between border-b bg-white px-6 py-4">
         <div>
           <h1 className="text-xl font-semibold">Аналіз Контракту</h1>
@@ -406,7 +452,13 @@ export default function ReviewPage() {
               <Button variant="outline" size="sm" onClick={handleReset}>
                 ← Новий аналіз
               </Button>
-              <Button variant="outline" size="sm">
+              {/* FIX L2: Button now triggers JSON download */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSaveReport}
+                disabled={!rawResponse}
+              >
                 Зберегти звіт
               </Button>
             </>
@@ -419,7 +471,6 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      {/* SPLIT VIEW (All 3 AI: Unanimous choice!) */}
       <SplitView
         leftContent={
           <div className="space-y-md">
@@ -430,7 +481,6 @@ export default function ReviewPage() {
               </p>
             </div>
             
-            {/* Contract text (DeepSeek: IBM Plex Serif 16px/1.75) */}
             <div className="contract-text custom-scrollbar whitespace-pre-wrap rounded-md border bg-white p-lg font-serif">
               {contractText || 'Текст контракту відсутній'}
             </div>
@@ -439,26 +489,22 @@ export default function ReviewPage() {
         rightContent={
           <div className="space-y-md">
             {isAnalyzing ? (
-              <>
-                {/* "War Room" Agent Progress (All 3 AI: Show work!) */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Процес Аналізу</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <AgentProgress
-                      agents={Object.values(agents).map((agent) => ({
-                        name: agent.name,
-                        status: agent.status,
-                        message: agent.message,
-                      }))}
-                    />
-                  </CardContent>
-                </Card>
-              </>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Процес Аналізу</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <AgentProgress
+                    agents={Object.values(agents).map((agent) => ({
+                      name: agent.name,
+                      status: agent.status,
+                      message: agent.message,
+                    }))}
+                  />
+                </CardContent>
+              </Card>
             ) : (
               <>
-                {/* Error message */}
                 {error && (
                   <div className="rounded-md border border-red-200 bg-red-50 p-4 mb-4">
                     <div className="flex items-start gap-3">
@@ -471,7 +517,6 @@ export default function ReviewPage() {
                   </div>
                 )}
 
-                {/* Summary card (if available) */}
                 {summary && (
                   <Card>
                     <CardHeader>
@@ -483,7 +528,6 @@ export default function ReviewPage() {
                   </Card>
                 )}
                 
-                {/* Hybrid Risk Dashboard (All 3 AI: unanimous!) */}
                 <RiskDashboard
                   risks={risks}
                   onRiskClick={handleRiskClick}
