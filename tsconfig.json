@@ -21,7 +21,9 @@
       "@/*": ["./*"],
       "@/core/*": ["./packages/core/*"],
       "@/legal-council/*": ["./packages/legal-council/*"],
-      "@/ui-shared/*": ["./packages/ui-shared/*"]
+      "@/ui-shared/*": ["./packages/ui-shared/*"],
+      "@/shared/*": ["./legal-council-ui-clean/src/shared/*"],
+      "@/stores/*": ["./legal-council-ui-clean/src/stores/*"]
     },
     "plugins": [
       {

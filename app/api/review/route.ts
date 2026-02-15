@@ -1,14 +1,18 @@
 /**
- * API Route: Contract Review
+ * API Route: Contract Review with SSE Streaming
  * POST /api/review
  * 
- * FIX #15 (Feb 13, 2026): Added contract text size validation
- *   — Max 50,000 chars (~25 pages) to prevent context window overflow
- *   — Clear Ukrainian error message for users
+ * v3: SSE streaming for real-time agent progress
+ *   — Returns text/event-stream with agent_start/agent_complete/result events
+ *   — Frontend reads stream with fetch + getReader()
+ * 
+ * Previous fixes preserved:
+ *   FIX #15: Contract text size validation
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { ReviewOrchestrator } from '../../../packages/legal-council/orchestrators/review-orchestrator';
+import { createSSEStream, createSSEResponse } from '../../../packages/legal-council/utils/sse-helpers';
 import type { ContractReviewRequest } from '../../../packages/legal-council/types/review-types';
 
 // ==========================================
@@ -19,55 +23,64 @@ export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-// FIX #15: Size limits
-const MAX_CONTRACT_CHARS = 50_000; // ~25 pages, fits in most LLM context windows
-const MIN_CONTRACT_CHARS = 50;     // At least something meaningful
+// Size limits
+const MAX_CONTRACT_CHARS = 50_000;
+const MIN_CONTRACT_CHARS = 50;
 
 // ==========================================
-// POST HANDLER
+// POST HANDLER — SSE Streaming
 // ==========================================
 
 export async function POST(request: NextRequest) {
+  // Parse and validate request body
+  let body: any;
   try {
-    const body = await request.json();
-    
-    // Validate required fields
-    if (!body.contractText || typeof body.contractText !== 'string') {
-      return NextResponse.json(
-        { error: 'Missing or invalid contractText field' },
-        { status: 400 }
-      );
-    }
+    body = await request.json();
+  } catch {
+    return new Response(
+      JSON.stringify({ error: 'Invalid JSON body' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 
-    // FIX #15: Size validation
-    const textLength = body.contractText.length;
+  // Validate required fields
+  if (!body.contractText || typeof body.contractText !== 'string') {
+    return new Response(
+      JSON.stringify({ error: 'Missing or invalid contractText field' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 
-    if (textLength < MIN_CONTRACT_CHARS) {
-      return NextResponse.json(
-        { error: `Текст контракту занадто короткий (${textLength} символів). Мінімум: ${MIN_CONTRACT_CHARS} символів.` },
-        { status: 400 }
-      );
-    }
+  // Size validation
+  const textLength = body.contractText.length;
 
-    if (textLength > MAX_CONTRACT_CHARS) {
-      return NextResponse.json(
-        { error: `Текст контракту занадто довгий (${textLength} символів). Максимум: ${MAX_CONTRACT_CHARS} символів (~25 сторінок). Будь ласка, розділіть документ на частини.` },
-        { status: 400 }
-      );
-    }
+  if (textLength < MIN_CONTRACT_CHARS) {
+    return new Response(
+      JSON.stringify({ error: `Текст контракту занадто короткий (${textLength} символів). Мінімум: ${MIN_CONTRACT_CHARS} символів.` }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 
-    // Build request
-    const reviewRequest: ContractReviewRequest = {
-      contractText: body.contractText,
-      contractType: body.contractType,
-      jurisdiction: body.jurisdiction || 'Ukraine',
-      specificQuestions: body.specificQuestions,
-      focusAreas: body.focusAreas,
-    };
+  if (textLength > MAX_CONTRACT_CHARS) {
+    return new Response(
+      JSON.stringify({ error: `Текст контракту занадто довгий (${textLength} символів). Максимум: ${MAX_CONTRACT_CHARS} символів (~25 сторінок). Будь ласка, розділіть документ на частини.` }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 
-    console.log(`📋 Review request received (${reviewRequest.contractText.length} chars)`);
+  // Build review request
+  const reviewRequest: ContractReviewRequest = {
+    contractText: body.contractText,
+    contractType: body.contractType,
+    jurisdiction: body.jurisdiction || 'Ukraine',
+    specificQuestions: body.specificQuestions,
+    focusAreas: body.focusAreas,
+  };
 
-    // Initialize orchestrator
+  console.log(`📋 Review request received (${reviewRequest.contractText.length} chars) — SSE mode`);
+
+  // Create SSE stream
+  const stream = createSSEStream(async (send, onProgress) => {
     const orchestrator = new ReviewOrchestrator({
       maxRounds: 3,
       maxSeverityThreshold: 3,
@@ -75,44 +88,26 @@ export async function POST(request: NextRequest) {
       enableAuditTrail: true,
     });
 
-    // Run analysis
     const startTime = Date.now();
-    const result = await orchestrator.analyze(reviewRequest);
+    const result = await orchestrator.analyze(reviewRequest, onProgress);
     const duration = Date.now() - startTime;
 
     console.log(`✅ Review complete in ${(duration / 1000).toFixed(1)}s`);
     console.log(`   Cost: $${result.metadata.totalCost.toFixed(4)}`);
-    console.log(`   Confidence: ${(result.confidence * 100).toFixed(0)}%`);
 
-    // Return response
-    return NextResponse.json({
-      success: true,
-      data: result,
-      metadata: {
-        processingTimeMs: duration,
-        timestamp: new Date().toISOString(),
+    // Send the full result
+    send({
+      type: 'result',
+      data: {
+        success: true,
+        data: result,
+        metadata: {
+          processingTimeMs: duration,
+          timestamp: new Date().toISOString(),
+        },
       },
     });
+  });
 
-  } catch (error) {
-    console.error('❌ Review API error:', error);
-
-    if (error instanceof Error) {
-      if (error.message.includes('API key')) {
-        return NextResponse.json(
-          { error: 'Invalid API configuration. Please check environment variables.' },
-          { status: 500 }
-        );
-      }
-      if (error.message.includes('rate limit')) {
-        return NextResponse.json(
-          { error: 'Rate limit exceeded. Please try again later.' },
-          { status: 429 }
-        );
-      }
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
+  return createSSEResponse(stream);
 }

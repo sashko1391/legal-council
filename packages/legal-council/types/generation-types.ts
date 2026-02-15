@@ -1,5 +1,13 @@
 /**
- * Document Generation Types
+ * Document Generation Types — v2 ПРД (Принцип Розумної Достатності)
+ * 
+ * Changes v1 → v2:
+ *   - DocumentGenerationRequest: added clarificationAnswers field
+ *   - DocumentType: added lease_agreement, sale_agreement, service_agreement
+ *   - AnalyzerOutput.analysis: added readyToGenerate + confidence fields
+ *   - PartyInfo.role: added Ukrainian roles (Орендодавець, Продавець, etc.)
+ *   - PartyInfo.entityType: added 'fop'
+ *   - Improvement.type: added 'sufficiency_added' | 'redundancy_removed'
  * 
  * FIX #10: gen-validator role
  * FIX #11: Partial<Record> for COMMON_CLAUSES (no `as any`)
@@ -19,6 +27,8 @@ export interface DocumentGenerationRequest {
   parties?: PartyInfo[];
   specificClauses?: ClauseRequest[];
   template?: 'standard' | 'pro-client' | 'balanced' | 'custom';
+  /** Pre-Generation Gate: answers to clarification questions from Analyzer */
+  clarificationAnswers?: Record<string, string>;
 }
 
 export type DocumentType =
@@ -28,14 +38,29 @@ export type DocumentType =
   | 'saas_agreement'
   | 'vendor_contract'
   | 'partnership_agreement'
+  | 'lease_agreement'
+  | 'sale_agreement'
+  | 'service_agreement'
   | 'amendment'
   | 'custom_clause';
 
 export interface PartyInfo {
-  role: 'party_a' | 'party_b' | 'employer' | 'employee' | 'vendor' | 'client';
+  role:
+    | 'party_a'
+    | 'party_b'
+    | 'employer'
+    | 'employee'
+    | 'vendor'
+    | 'client'
+    | 'Замовник'
+    | 'Виконавець'
+    | 'Орендодавець'
+    | 'Орендар'
+    | 'Продавець'
+    | 'Покупець';
   name?: string;
   jurisdiction?: string;
-  entityType?: 'individual' | 'corporation' | 'llc' | 'partnership';
+  entityType?: 'individual' | 'corporation' | 'llc' | 'partnership' | 'fop';
 }
 
 export interface ClauseRequest {
@@ -67,6 +92,10 @@ export interface AnalyzerOutput extends BaseAgentOutput {
     suggestedClauses: SuggestedClause[];
     potentialIssues: string[];
     clarificationsNeeded: string[];
+    /** Pre-Generation Gate: true if enough info to proceed */
+    readyToGenerate: boolean;
+    /** Analyzer's confidence in available information (0.0–1.0) */
+    confidence: number;
   };
 }
 
@@ -76,6 +105,7 @@ export interface DrafterOutput extends BaseAgentOutput {
     documentText: string;
     structure: DocumentStructure;
     includedClauses: GeneratedClause[];
+    omittedClauses?: { type: string; reason: string }[];
     notes: string[];
   };
 }
@@ -88,6 +118,13 @@ export interface GenerationValidatorOutput extends BaseAgentOutput {
     riskFlags: RiskFlag[];
     overallScore: number;
     verdict: 'APPROVED' | 'NEEDS_REVISION';
+    /** ПРД: reasonable sufficiency assessment */
+    reasonableSufficiency?: {
+      completenessScore: number;
+      concisenessScore: number;
+      missingEssentials: string[];
+      unnecessaryDuplications: string[];
+    };
   };
 }
 
@@ -156,7 +193,7 @@ export interface RiskFlag {
 }
 
 export interface Improvement {
-  type: 'clarity' | 'legal_precision' | 'formatting' | 'tone';
+  type: 'clarity' | 'legal_precision' | 'formatting' | 'tone' | 'grammar' | 'legal' | 'dstu' | 'sufficiency_added' | 'redundancy_removed';
   before: string;
   after: string;
   rationale: string;
@@ -236,9 +273,9 @@ export const COMMON_CLAUSES: Record<ClauseType, string> = {
 
   dispute_resolution: `Спори, що виникають з цього Договору, вирішуються шляхом переговорів. У разі неможливості вирішення спору шляхом переговорів протягом [NEGOTIATION_PERIOD], спір передається на розгляд до господарського суду за місцезнаходженням відповідача відповідно до ГПК України.`,
 
-  force_majeure: `Сторони звільняються від відповідальності за часткове або повне невиконання зобов'язань за цим Договором, якщо це невиконання стало наслідком обставин непереборної сили (форс-мажор), а саме: стихійних лих, воєнних дій, ембарго, дій органів влади, епідемій тощо. Сторона, для якої склались форс-мажорні обставини, зобов'язана повідомити іншу Сторону протягом [FORCE_MAJEURE_NOTICE] з підтвердженням ТПП України.`,
+  force_majeure: `Сторони звільняються від відповідальності за часткове або повне невиконання зобов'язань за цим Договором, якщо це невиконання стало наслідком обставин непереборної сили (форс-мажор), а саме: стихійних лих, воєнних дій, ембарго, дій органів влади, епідемій тощо. Сторона, для якої склалися форс-мажорні обставини, зобов'язана повідомити іншу Сторону протягом [FORCE_MAJEURE_NOTICE] з підтвердженням ТПП України.`,
 
-  warranties: `[PARTY_A] гарантує, що: (а) має всі необхідні дозволи та ліцензії для виконання цього Договору; (б) виконання Договору не порушує права третіх осіб; (в) результати робіт відповідатимуть вимогам, зазначеним у Додатку №1 до цього Договору.`,
+  warranties: `[PARTY_A] гарантує, що: (а) має всі необхідні дозволи та ліцензії для виконання цього Договору; (б) виконання Договору не порушує прав третіх осіб; (в) результати робіт відповідатимуть вимогам, зазначеним у Додатку №1 до цього Договору.`,
 
   custom: `[CUSTOM_CLAUSE_TEXT]`,
 };
@@ -249,14 +286,17 @@ export const COMMON_CLAUSES: Record<ClauseType, string> = {
 
 export function getDocumentTypeLabel(type: DocumentType): string {
   const labels: Record<DocumentType, string> = {
-    nda: 'Non-Disclosure Agreement',
-    employment_agreement: 'Employment Agreement',
-    consulting_agreement: 'Consulting Agreement',
+    nda: 'Договір про нерозголошення (NDA)',
+    employment_agreement: 'Трудовий договір',
+    consulting_agreement: 'Договір про надання консультаційних послуг',
     saas_agreement: 'SaaS Agreement',
-    vendor_contract: 'Vendor Contract',
-    partnership_agreement: 'Partnership Agreement',
-    amendment: 'Contract Amendment',
-    custom_clause: 'Custom Clause',
+    vendor_contract: 'Договір поставки',
+    partnership_agreement: 'Договір про партнерство',
+    lease_agreement: 'Договір оренди',
+    sale_agreement: 'Договір купівлі-продажу',
+    service_agreement: 'Договір про надання послуг',
+    amendment: 'Додаткова угода',
+    custom_clause: 'Окреме застереження',
   };
   return labels[type];
 }

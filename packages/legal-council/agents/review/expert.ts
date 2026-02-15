@@ -4,14 +4,17 @@
  * 
  * FIX (Feb 10, 2026): Validation expects flat structure from LLM
  * UPDATE (Feb 14, 2026): RAG integration — semantic search for relevant law articles
- * FIX C2 (Feb 14, 2026): Added Ukrainian contract type mapping (оренда→lease, etc.)
+ * FIX C2 (Feb 14, 2026): Added Ukrainian contract type mapping
  * FIX M2 (Feb 14, 2026): Replaced console.log/warn with structured logger
+ * 
+ * REFACTOR (Feb 14, 2026 v2): RAG moved to orchestrator level.
+ *   Expert now receives lawContext as parameter instead of fetching it.
+ *   All agents share the same law context from orchestrator.
  */
 
 import { BaseAgent } from '../base-agent';
 import { buildExpertPrompt } from '../../config/review-prompts';
 import { createReviewAgentConfigs } from '../../config/models';
-import { getLawContext } from '../../services/law-rag-service';
 import { createAgentLogger } from '../../utils/logger';
 import type { ExpertOutput, ContractReviewRequest } from '../../types/review-types';
 
@@ -28,22 +31,21 @@ export class ExpertAgent extends BaseAgent<ExpertOutput> {
 
   /**
    * Analyze contract and return comprehensive expert opinion
+   * @param request - Contract review request
+   * @param lawContext - Pre-fetched law context from orchestrator (shared by all agents)
    */
-  async analyze(request: ContractReviewRequest): Promise<ExpertOutput> {
+  async analyze(request: ContractReviewRequest, lawContext?: string): Promise<ExpertOutput> {
     // Build context-aware system prompt
     this.systemPrompt = await buildExpertPrompt(
       request.contractType,
       request.jurisdiction
     );
 
-    // RAG: Find relevant law articles based on actual contract text
-    const lawContext = await this.findRelevantLaws(
-      request.contractText,
-      request.contractType
-    );
+    // Use provided lawContext or empty fallback
+    const laws = lawContext || '<relevant_law_articles>\nКонтекст законодавства не надано.\n</relevant_law_articles>';
 
-    // Build user prompt with all context + RAG results
-    const userPrompt = this.buildUserPrompt(request, lawContext);
+    // Build user prompt with all context + law articles
+    const userPrompt = this.buildUserPrompt(request, laws);
 
     // Call LLM
     const rawOutput = await this.call(userPrompt);
@@ -55,51 +57,6 @@ export class ExpertAgent extends BaseAgent<ExpertOutput> {
     this.validateOutput(output);
 
     return output;
-  }
-
-  /**
-   * RAG: Search Pinecone for relevant Ukrainian law articles
-   * Falls back gracefully if Pinecone is unavailable
-   * 
-   * FIX C2: Maps both English AND Ukrainian contract type names to RAG categories
-   */
-  private async findRelevantLaws(
-    contractText: string,
-    contractType?: string
-  ): Promise<string> {
-    try {
-      // FIX C2: Map contract types to RAG categories
-      // Supports both English keys (from API) and Ukrainian keys (from UI)
-      const typeMap: Record<string, string> = {
-        // English
-        'vendor': 'sale',
-        'sale': 'sale',
-        'lease': 'lease',
-        'rental': 'lease',
-        'service': 'service',
-        'employment': 'employment',
-        'work': 'work',
-        'loan': 'loan',
-        'nda': 'general',
-        // Ukrainian (from UI select options)
-        'оренда': 'lease',
-        'поставка': 'sale',
-        'послуги': 'service',
-        'трудовий': 'employment',
-        'підряд': 'work',
-        'купівля-продаж': 'sale',
-        'інше': 'general',
-      };
-      
-      const ragType = typeMap[(contractType || '').toLowerCase()] || 'general';
-      
-      const lawContext = await getLawContext(contractText, ragType);
-      log.info(`RAG: found relevant articles for type="${ragType}" (input="${contractType}")`);
-      return lawContext;
-    } catch (error) {
-      log.warn('RAG unavailable, proceeding without law context:', error);
-      return '<relevant_law_articles>\nRAG система тимчасово недоступна. Використовуйте загальні знання українського законодавства.\n</relevant_law_articles>';
-    }
   }
 
   /**
@@ -123,7 +80,7 @@ export class ExpertAgent extends BaseAgent<ExpertOutput> {
       prompt += `Jurisdiction: ${request.jurisdiction}\n`;
     }
 
-    // Add RAG results — relevant law articles
+    // Add law articles from orchestrator
     prompt += '\n# RELEVANT UKRAINIAN LAW ARTICLES\n\n';
     prompt += lawContext;
     prompt += '\n\n';

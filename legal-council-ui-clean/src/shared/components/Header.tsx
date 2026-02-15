@@ -8,6 +8,7 @@ import { cn } from '@/shared/lib'
 const NAV_LINKS = [
   { href: '/', label: 'Головна', icon: '🏠' },
   { href: '/review', label: 'Аналіз', icon: '🔍' },
+  { href: '/generate', label: 'Генерація', icon: '✨' },
   { href: '/history', label: 'Історія', icon: '📊' },
 ]
 
@@ -46,10 +47,10 @@ export function Header() {
           })}
         </nav>
         
-        {/* Right section - можна додати user menu пізніше */}
+        {/* Version */}
         <div className="flex items-center gap-3">
           <div className="text-xs text-gray-500">
-            v1.0 Beta
+            v2.0 Beta
           </div>
         </div>
       </div>

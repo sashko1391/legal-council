@@ -14,17 +14,17 @@ const navigation = [
     module: 'review' as const,
   },
   {
-    name: 'Історія',
-    href: '/history',
-    icon: '📂',
-    module: 'history' as const,
-  },
-  {
     name: 'Генерація',
     href: '/generate',
     icon: '✨',
     module: 'generation' as const,
-    disabled: true, // Coming soon
+    // disabled removed — генерація тепер працює
+  },
+  {
+    name: 'Історія',
+    href: '/history',
+    icon: '📂',
+    module: 'history' as const,
   },
   {
     name: 'Аналітика',
@@ -52,7 +52,7 @@ export function Sidebar() {
           {!sidebarCollapsed && (
             <Link href="/" className="flex items-center gap-2">
               <span className="text-2xl">⚖️</span>
-              <span className="font-bold">Legal Council</span>
+              <span className="font-bold">AGENTIS</span>
             </Link>
           )}
 
@@ -69,27 +69,28 @@ export function Sidebar() {
         {/* Navigation */}
         <nav className="flex-1 space-y-1 p-2">
           {navigation.map((item) => {
+            const isDisabled = 'disabled' in item && item.disabled
             const isActive = pathname.startsWith(item.href)
 
             return (
               <Link
                 key={item.href}
-                href={item.disabled ? '#' : item.href}
+                href={isDisabled ? '#' : item.href}
                 className={cn(
                   'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
                   isActive
                     ? 'bg-navy text-navy-foreground'
                     : 'hover:bg-accent hover:text-accent-foreground',
-                  item.disabled && 'cursor-not-allowed opacity-50',
+                  isDisabled && 'cursor-not-allowed opacity-50',
                   sidebarCollapsed && 'justify-center'
                 )}
-                onClick={(e) => item.disabled && e.preventDefault()}
+                onClick={(e) => isDisabled && e.preventDefault()}
               >
                 <span className="text-xl">{item.icon}</span>
                 {!sidebarCollapsed && (
                   <span className="flex-1">{item.name}</span>
                 )}
-                {!sidebarCollapsed && item.disabled && (
+                {!sidebarCollapsed && isDisabled && (
                   <span className="text-xs opacity-70">Скоро</span>
                 )}
               </Link>
@@ -101,12 +102,12 @@ export function Sidebar() {
         <div className="border-t p-4">
           {!sidebarCollapsed ? (
             <div className="space-y-1 text-xs text-gray-500">
-              <p>v1.0.0</p>
-              <p>© 2026 Legal Council</p>
+              <p>v1.1.0</p>
+              <p>© 2026 AGENTIS</p>
             </div>
           ) : (
             <div className="text-center text-xs text-gray-500">
-              v1.0
+              v1.1
             </div>
           )}
         </div>

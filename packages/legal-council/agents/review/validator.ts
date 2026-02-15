@@ -4,9 +4,9 @@
  * 
  * FIX (Feb 10, 2026): Transform flat LLM output to nested structure
  * FIX (Feb 13, 2026): Resilient transformOutput — handles various LLM output formats
- *   - Nested (validation.verdict) or flat (verdict) structures
- *   - Alternative field names (overall_completeness → verdict mapping)
- *   - Never throws on missing fields — uses sensible defaults
+ * 
+ * REFACTOR (Feb 14, 2026 v2): Accepts lawContext from orchestrator.
+ *   Can verify that Expert/Provocateur cited correct law articles.
  */
 
 import { BaseAgent } from '../base-agent';
@@ -27,13 +27,21 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
     super(validatorConfig, '');
   }
 
+  /**
+   * Validate analysis completeness and consistency
+   * @param request - Original contract review request
+   * @param expertOutput - Expert's analysis
+   * @param provocateurOutput - Provocateur's critique
+   * @param lawContext - Pre-fetched law context from orchestrator (shared by all agents)
+   */
   async validate(
     request: ContractReviewRequest,
     expertOutput: ExpertOutput,
-    provocateurOutput: ProvocateurOutput
+    provocateurOutput: ProvocateurOutput,
+    lawContext?: string
   ): Promise<ValidatorOutput> {
     this.systemPrompt = await buildValidatorPrompt();
-    const userPrompt = this.buildUserPrompt(request, expertOutput, provocateurOutput);
+    const userPrompt = this.buildUserPrompt(request, expertOutput, provocateurOutput, lawContext);
     const rawOutput = await this.call(userPrompt);
 
     // Transform and normalize whatever structure LLM returned
@@ -45,12 +53,21 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
   private buildUserPrompt(
     request: ContractReviewRequest,
     expertOutput: ExpertOutput,
-    provocateurOutput: ProvocateurOutput
+    provocateurOutput: ProvocateurOutput,
+    lawContext?: string
   ): string {
     let prompt = '# ORIGINAL CONTRACT\n\n';
     prompt += '```\n';
     prompt += request.contractText;
     prompt += '\n```\n\n';
+
+    // Add law context so Validator can verify legal citations
+    if (lawContext) {
+      prompt += '# RELEVANT UKRAINIAN LAW ARTICLES\n\n';
+      prompt += lawContext;
+      prompt += '\n\n';
+      prompt += 'Перевірте чи Експерт та Провокатор правильно цитують ці статті.\n\n';
+    }
 
     prompt += '# USER\'S QUERY\n\n';
     if (request.specificQuestions && request.specificQuestions.length > 0) {
@@ -84,6 +101,7 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
     prompt += '2. Are there contradictions between Expert and Provocateur?\n';
     prompt += '3. Are standard clauses for this contract type reviewed?\n';
     prompt += '4. Are recommendations actionable?\n';
+    prompt += '5. Are legal citations correct based on the provided law articles?\n';
     prompt += '\nOutput strict JSON format as specified in system prompt.\n';
 
     return prompt;
@@ -91,12 +109,6 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
 
   /**
    * RESILIENT transform: handles nested, flat, and alternative field names.
-   * 
-   * LLMs may return:
-   * A) Flat:    { verdict: "COMPLETE", completenessScore: 85, ... }
-   * B) Nested:  { validation: { verdict: "COMPLETE", ... } }
-   * C) Alt keys: { validation: { overall_completeness: "partial", ... } }
-   * D) Mixed:   { isComplete: true, critique: { ... }, ... }
    */
   private transformOutput(rawOutput: any): ValidatorOutput {
     // Step 1: Find the "source" object — could be root or nested
@@ -145,7 +157,6 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
    * Extract verdict from various possible field names and values
    */
   private extractVerdict(src: any, root: any): 'COMPLETE' | 'NEEDS_REVISION' {
-    // Direct verdict field
     const directVerdict = src.verdict || root.verdict;
     if (directVerdict) {
       const upper = String(directVerdict).toUpperCase().trim();
@@ -157,7 +168,6 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
       }
     }
 
-    // Alternative: overall_completeness
     const completeness = src.overall_completeness || src.overallCompleteness || root.overall_completeness;
     if (completeness) {
       const lower = String(completeness).toLowerCase().trim();
@@ -165,24 +175,18 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
       if (lower === 'partial' || lower === 'incomplete' || lower === 'no') return 'NEEDS_REVISION';
     }
 
-    // Alternative: isComplete boolean
     const isComplete = src.isComplete ?? src.is_complete ?? root.isComplete;
     if (typeof isComplete === 'boolean') {
       return isComplete ? 'COMPLETE' : 'NEEDS_REVISION';
     }
 
-    // Alternative: completeness score
     const score = this.extractCompletenessScore(src, root);
     if (score >= 80) return 'COMPLETE';
 
-    // Default: if we have any data at all, assume needs revision
     logger.warn('Could not determine verdict from LLM output, defaulting to NEEDS_REVISION');
     return 'NEEDS_REVISION';
   }
 
-  /**
-   * Extract completeness score from various possible field names
-   */
   private extractCompletenessScore(src: any, root: any): number {
     const candidates = [
       src.completenessScore, src.completeness_score, src.score, src.overallScore,
@@ -197,7 +201,6 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
       }
     }
 
-    // Infer from verdict if possible
     const verdict = src.verdict || root.verdict || src.overall_completeness;
     if (verdict) {
       const v = String(verdict).toLowerCase();
@@ -206,12 +209,9 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
       if (v === 'incomplete') return 30;
     }
 
-    return 70; // Safe default
+    return 70;
   }
 
-  /**
-   * Extract an array from multiple possible field names
-   */
   private extractArray(src: any, fieldNames: string[]): any[] {
     for (const name of fieldNames) {
       if (Array.isArray(src[name])) return src[name];
@@ -219,9 +219,6 @@ export class ValidatorAgent extends BaseAgent<ValidatorOutput> {
     return [];
   }
 
-  /**
-   * Validate output — now lenient, only warns instead of throwing
-   */
   private validateOutput(output: ValidatorOutput): void {
     if (!output.validation) {
       logger.warn('Validator output has no validation object — using defaults');

@@ -3,6 +3,9 @@
  * Combines all council outputs into final executive summary
  * 
  * FIX (Feb 10, 2026): Transform flat LLM output to nested structure
+ * 
+ * REFACTOR (Feb 14, 2026 v2): Accepts lawContext from orchestrator.
+ *   Can reference specific law articles in final recommendations.
  */
 
 import { BaseAgent } from '../base-agent';
@@ -25,18 +28,24 @@ export class SynthesizerAgent extends BaseAgent<SynthesizerOutput> {
 
   /**
    * Synthesize all council outputs into final answer
+   * @param expertOutput - Expert's analysis
+   * @param provocateurOutput - Provocateur's critique
+   * @param validatorOutput - Validator's assessment
+   * @param lawContext - Pre-fetched law context from orchestrator (shared by all agents)
    */
   async synthesize(
     expertOutput: ExpertOutput,
     provocateurOutput: ProvocateurOutput,
-    validatorOutput: ValidatorOutput
+    validatorOutput: ValidatorOutput,
+    lawContext?: string
   ): Promise<SynthesizerOutput> {
     this.systemPrompt = await buildSynthesizerPrompt();
 
     const userPrompt = this.buildUserPrompt(
       expertOutput,
       provocateurOutput,
-      validatorOutput
+      validatorOutput,
+      lawContext
     );
 
     const rawOutput = await this.call(userPrompt);
@@ -55,9 +64,18 @@ export class SynthesizerAgent extends BaseAgent<SynthesizerOutput> {
   private buildUserPrompt(
     expertOutput: ExpertOutput,
     provocateurOutput: ProvocateurOutput,
-    validatorOutput: ValidatorOutput
+    validatorOutput: ValidatorOutput,
+    lawContext?: string
   ): string {
     let prompt = '# AI COUNCIL OUTPUTS TO SYNTHESIZE\n\n';
+
+    // Law context for grounding recommendations
+    if (lawContext) {
+      prompt += '## RELEVANT UKRAINIAN LAW ARTICLES\n\n';
+      prompt += lawContext;
+      prompt += '\n\n';
+      prompt += 'Посилайтесь на конкретні статті у ваших рекомендаціях для клієнта.\n\n';
+    }
 
     // Expert analysis
     prompt += '## EXPERT ANALYSIS\n\n';
@@ -90,6 +108,7 @@ export class SynthesizerAgent extends BaseAgent<SynthesizerOutput> {
     prompt += '4. **Be actionable**: Every risk needs clear mitigation\n';
     prompt += '5. **Plain language**: Client-friendly, not overly technical\n';
     prompt += '6. **Balanced**: Honest about risks, but not alarmist\n';
+    prompt += '7. **Legal grounding**: Reference specific law articles in recommendations\n';
     prompt += '\nIf Validator found contradictions, address them in keyDisagreements.\n';
     prompt += '\nOutput strict JSON format as specified in system prompt.\n';
 
@@ -134,7 +153,7 @@ export class SynthesizerAgent extends BaseAgent<SynthesizerOutput> {
       );
     }
 
-    // Validate we don't have too many risks/recommendations (optimized prompt says max 5 each)
+    // Validate we don't have too many risks/recommendations
     const riskCount = output.synthesis.criticalRisks.length;
     const recCount = output.synthesis.recommendations.length;
 

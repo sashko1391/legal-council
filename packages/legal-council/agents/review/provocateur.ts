@@ -3,6 +3,9 @@
  * Adversarial red-team critic - finds exploitable flaws
  * 
  * FIX (Feb 10, 2026): Transform flat LLM output to nested structure
+ * 
+ * REFACTOR (Feb 14, 2026 v2): Accepts lawContext from orchestrator.
+ *   Now has access to full Ukrainian legislation for legal-grounded attacks.
  */
 
 import { BaseAgent } from '../base-agent';
@@ -21,14 +24,18 @@ export class ProvocateurAgent extends BaseAgent<ProvocateurOutput> {
 
   /**
    * Critique contract and find exploitable flaws
+   * @param contractText - Raw contract text
+   * @param expertAnalysis - Expert's analysis output
+   * @param lawContext - Pre-fetched law context from orchestrator (shared by all agents)
    */
   async critique(
     contractText: string,
-    expertAnalysis?: ExpertOutput
+    expertAnalysis?: ExpertOutput,
+    lawContext?: string
   ): Promise<ProvocateurOutput> {
     this.systemPrompt = await buildProvocateurPrompt();
 
-    const userPrompt = this.buildUserPrompt(contractText, expertAnalysis);
+    const userPrompt = this.buildUserPrompt(contractText, expertAnalysis, lawContext);
 
     const rawOutput = await this.call(userPrompt);
 
@@ -45,12 +52,22 @@ export class ProvocateurAgent extends BaseAgent<ProvocateurOutput> {
    */
   private buildUserPrompt(
     contractText: string,
-    expertAnalysis?: ExpertOutput
+    expertAnalysis?: ExpertOutput,
+    lawContext?: string
   ): string {
     let prompt = '# CONTRACT TO ATTACK\n\n';
     prompt += '```\n';
     prompt += contractText;
     prompt += '\n```\n\n';
+
+    // Add law context so Provocateur can find legal violations
+    if (lawContext) {
+      prompt += '# RELEVANT UKRAINIAN LAW ARTICLES\n\n';
+      prompt += lawContext;
+      prompt += '\n\n';
+      prompt += 'Використовуйте ці статті для обґрунтування ваших атак. ';
+      prompt += 'Якщо пункт договору суперечить закону — це найсильніша вразливість.\n\n';
+    }
 
     if (expertAnalysis) {
       prompt += '# EXPERT ALREADY FOUND THESE ISSUES\n\n';

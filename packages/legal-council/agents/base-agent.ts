@@ -284,11 +284,13 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
     const client = createGoogleClient();
     // FIX C3: Gemini SDK doesn't support AbortSignal on generateContent,
     // so we use requestOptions.timeout on the model itself
+    // NOTE: 'as any' needed because installed SDK types don't include systemInstruction
+    // but the runtime API supports it. Update @google/generative-ai to latest to remove.
     const model = client.getGenerativeModel(
       {
         model: this.config.model,
         systemInstruction: this.systemPrompt, // FIX #7
-      },
+      } as any,
       { timeout: API_TIMEOUT_MS } // FIX C3: request-level timeout
     );
 
@@ -302,7 +304,8 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
         const response = result.response.text();
 
         // FIX #9: Real token counts from API (fallback /3 for Ukrainian text)
-        const usage = result.response.usageMetadata;
+        // NOTE: 'as any' needed because installed SDK types don't include usageMetadata
+        const usage = (result.response as any).usageMetadata;
         const inputTokens = usage?.promptTokenCount || Math.ceil(userPrompt.length / 3);
         const outputTokens = usage?.candidatesTokenCount || Math.ceil(response.length / 3);
 
@@ -414,6 +417,10 @@ export abstract class BaseAgent<TOutput extends BaseAgentOutput = BaseAgentOutpu
     // Fix 5: Fix unquoted keys (simple cases)
     // e.g., {key: "value"} → {"key": "value"}
     repaired = repaired.replace(/(\{|,)\s*([a-zA-Z_]\w*)\s*:/g, '$1"$2":');
+
+    // Fix 6: Fix keys with missing opening quote (LLM hallucination)
+    // e.g., citation": "value" → "citation": "value"
+    repaired = repaired.replace(/(\{|,)\s*([a-zA-Z_]\w*)"\s*:/g, '$1"$2":');
 
     return repaired;
   }
